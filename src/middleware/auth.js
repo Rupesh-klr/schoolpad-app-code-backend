@@ -33,7 +33,7 @@ export async function authenticate(req, res, next) {
   }
 
   const user = await one(
-    `SELECT id, role, status, email, phone, full_name FROM app_user WHERE id = ?`,
+    `SELECT id, role, status, email, phone, full_name FROM ls_user WHERE id = ?`,
     [claims.sub],
   );
 

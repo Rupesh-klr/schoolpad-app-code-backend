@@ -16,7 +16,7 @@
 -- tables — is what makes "an email may not exist under two roles" enforceable
 -- by the database instead of by remembering to check. The UNIQUE constraints
 -- below are the whole mechanism; application code cannot forget them.
-CREATE TABLE IF NOT EXISTS app_user (
+CREATE TABLE IF NOT EXISTS ls_user (
   id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   role            ENUM('admin','student','parent') NOT NULL,
   email           VARCHAR(191)     NULL,
@@ -34,13 +34,13 @@ CREATE TABLE IF NOT EXISTS app_user (
   PRIMARY KEY (id),
   -- Role-exclusive identity. NULL is not equal to NULL in a UNIQUE index, so a
   -- phone-only student and an email-only admin coexist without collision.
-  UNIQUE KEY uq_user_email (email),
-  UNIQUE KEY uq_user_phone (phone),
-  KEY idx_user_role_status (role, status),
-  KEY idx_user_created (created_at)
+  UNIQUE KEY uq_ls_user_email (email),
+  UNIQUE KEY uq_ls_user_phone (phone),
+  KEY idx_ls_user_role_status (role, status),
+  KEY idx_ls_user_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE IF NOT EXISTS school (
+CREATE TABLE IF NOT EXISTS ls_school (
   id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name            VARCHAR(191)    NOT NULL,
   code            VARCHAR(32)     NOT NULL,
@@ -52,12 +52,12 @@ CREATE TABLE IF NOT EXISTS school (
   created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_school_code (code),
-  KEY idx_school_status (status)
+  UNIQUE KEY uq_ls_school_code (code),
+  KEY idx_ls_school_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- The student-specific half of an app_user row.
-CREATE TABLE IF NOT EXISTS student_profile (
+-- The student-specific half of an ls_user row.
+CREATE TABLE IF NOT EXISTS ls_student_profile (
   user_id        BIGINT UNSIGNED NOT NULL,
   school_id      BIGINT UNSIGNED NULL,
   class_level    TINYINT UNSIGNED NULL,
@@ -66,10 +66,10 @@ CREATE TABLE IF NOT EXISTS student_profile (
   -- approved them by hand.
   access_code_id BIGINT UNSIGNED NULL,
   PRIMARY KEY (user_id),
-  KEY idx_student_school (school_id),
-  KEY idx_student_class (class_level),
-  CONSTRAINT fk_student_user   FOREIGN KEY (user_id)   REFERENCES app_user (id) ON DELETE CASCADE,
-  CONSTRAINT fk_student_school FOREIGN KEY (school_id) REFERENCES school (id)   ON DELETE SET NULL
+  KEY idx_ls_student_school (school_id),
+  KEY idx_ls_student_class (class_level),
+  CONSTRAINT fk_ls_student_user   FOREIGN KEY (user_id)   REFERENCES ls_user (id) ON DELETE CASCADE,
+  CONSTRAINT fk_ls_student_school FOREIGN KEY (school_id) REFERENCES ls_school (id)   ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Parent/guardian → child. Many-to-many because a child may have both parents
@@ -77,24 +77,24 @@ CREATE TABLE IF NOT EXISTS student_profile (
 --
 -- The per-side caps (5 children, 3 guardians) cannot be expressed as a
 -- constraint here, so they are enforced in a transaction in parentService.
-CREATE TABLE IF NOT EXISTS parent_link (
+CREATE TABLE IF NOT EXISTS ls_parent_link (
   id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   parent_user_id  BIGINT UNSIGNED NOT NULL,
   student_user_id BIGINT UNSIGNED NOT NULL,
   relation        ENUM('parent','guardian') NOT NULL DEFAULT 'parent',
   created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_parent_student (parent_user_id, student_user_id),
-  KEY idx_link_student (student_user_id),
-  CONSTRAINT fk_link_parent  FOREIGN KEY (parent_user_id)  REFERENCES app_user (id) ON DELETE CASCADE,
-  CONSTRAINT fk_link_student FOREIGN KEY (student_user_id) REFERENCES app_user (id) ON DELETE CASCADE
+  UNIQUE KEY uq_ls_parent_student (parent_user_id, student_user_id),
+  KEY idx_ls_link_student (student_user_id),
+  CONSTRAINT fk_ls_link_parent  FOREIGN KEY (parent_user_id)  REFERENCES ls_user (id) ON DELETE CASCADE,
+  CONSTRAINT fk_ls_link_student FOREIGN KEY (student_user_id) REFERENCES ls_user (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Access codes
 -- ─────────────────────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS access_code (
+CREATE TABLE IF NOT EXISTS ls_access_code (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   code          VARCHAR(32)     NOT NULL,
   -- A code may be pre-allocated to a school and class, which is how a code
@@ -112,12 +112,12 @@ CREATE TABLE IF NOT EXISTS access_code (
   PRIMARY KEY (id),
   -- Uniqueness is the product guarantee, so the database owns it. Generation
   -- retries on the duplicate-key error rather than checking first and racing.
-  UNIQUE KEY uq_code (code),
-  KEY idx_code_status (status),
-  KEY idx_code_school (school_id),
-  KEY idx_code_batch (batch_id),
-  CONSTRAINT fk_code_school FOREIGN KEY (school_id) REFERENCES school (id)   ON DELETE SET NULL,
-  CONSTRAINT fk_code_user   FOREIGN KEY (used_by)   REFERENCES app_user (id) ON DELETE SET NULL
+  UNIQUE KEY uq_ls_code (code),
+  KEY idx_ls_code_status (status),
+  KEY idx_ls_code_school (school_id),
+  KEY idx_ls_code_batch (batch_id),
+  CONSTRAINT fk_ls_code_school FOREIGN KEY (school_id) REFERENCES ls_school (id)   ON DELETE SET NULL,
+  CONSTRAINT fk_ls_code_user   FOREIGN KEY (used_by)   REFERENCES ls_user (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS access_code (
 -- Four separate tables would mean four joins to render a breadcrumb and a
 -- schema migration to add a level. One self-referencing table gives the whole
 -- tree in a single recursive query, and node_type keeps the levels meaningful.
-CREATE TABLE IF NOT EXISTS content_node (
+CREATE TABLE IF NOT EXISTS ls_content_node (
   id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   parent_id    BIGINT UNSIGNED NULL,
   node_type    ENUM('class','subject','chapter','topic') NOT NULL,
@@ -144,13 +144,13 @@ CREATE TABLE IF NOT EXISTS content_node (
   created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  KEY idx_node_parent (parent_id),
-  KEY idx_node_class (class_level, node_type),
-  KEY idx_node_visibility (visibility),
-  CONSTRAINT fk_node_parent FOREIGN KEY (parent_id) REFERENCES content_node (id) ON DELETE CASCADE
+  KEY idx_ls_node_parent (parent_id),
+  KEY idx_ls_node_class (class_level, node_type),
+  KEY idx_ls_node_visibility (visibility),
+  CONSTRAINT fk_ls_node_parent FOREIGN KEY (parent_id) REFERENCES ls_content_node (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE IF NOT EXISTS content_item (
+CREATE TABLE IF NOT EXISTS ls_content_item (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   node_id       BIGINT UNSIGNED NOT NULL,
   item_type     ENUM('video','pdf','image','link') NOT NULL,
@@ -169,13 +169,13 @@ CREATE TABLE IF NOT EXISTS content_item (
   created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  KEY idx_item_node (node_id, sort_order),
-  KEY idx_item_visibility (visibility),
-  CONSTRAINT fk_item_node FOREIGN KEY (node_id) REFERENCES content_node (id) ON DELETE CASCADE
+  KEY idx_ls_item_node (node_id, sort_order),
+  KEY idx_ls_item_visibility (visibility),
+  CONSTRAINT fk_ls_item_node FOREIGN KEY (node_id) REFERENCES ls_content_node (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- "Mark as completed" and "recently accessed" both read from here.
-CREATE TABLE IF NOT EXISTS content_progress (
+CREATE TABLE IF NOT EXISTS ls_content_progress (
   id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id      BIGINT UNSIGNED NOT NULL,
   item_id      BIGINT UNSIGNED NOT NULL,
@@ -186,10 +186,10 @@ CREATE TABLE IF NOT EXISTS content_progress (
   PRIMARY KEY (id),
   -- One row per student per item, so progress is an upsert and can never
   -- double-count a re-watch.
-  UNIQUE KEY uq_progress (user_id, item_id),
-  KEY idx_progress_recent (user_id, last_seen_at),
-  CONSTRAINT fk_progress_user FOREIGN KEY (user_id) REFERENCES app_user (id)     ON DELETE CASCADE,
-  CONSTRAINT fk_progress_item FOREIGN KEY (item_id) REFERENCES content_item (id) ON DELETE CASCADE
+  UNIQUE KEY uq_ls_progress (user_id, item_id),
+  KEY idx_ls_progress_recent (user_id, last_seen_at),
+  CONSTRAINT fk_ls_progress_user FOREIGN KEY (user_id) REFERENCES ls_user (id)     ON DELETE CASCADE,
+  CONSTRAINT fk_ls_progress_item FOREIGN KEY (item_id) REFERENCES ls_content_item (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -199,7 +199,7 @@ CREATE TABLE IF NOT EXISTS content_progress (
 -- OTP challenges. The code is stored hashed: this table is the single most
 -- useful thing for an attacker with read access to steal, and a hash makes it
 -- worthless.
-CREATE TABLE IF NOT EXISTS otp_challenge (
+CREATE TABLE IF NOT EXISTS ls_otp_challenge (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   identifier  VARCHAR(191) NOT NULL,
   channel     ENUM('sms','email','whatsapp') NOT NULL,
@@ -209,13 +209,13 @@ CREATE TABLE IF NOT EXISTS otp_challenge (
   consumed_at DATETIME NULL,
   created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  KEY idx_otp_lookup (identifier, consumed_at, expires_at),
-  KEY idx_otp_created (created_at)
+  KEY idx_ls_otp_lookup (identifier, consumed_at, expires_at),
+  KEY idx_ls_otp_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Refresh tokens, stored as SHA-256 digests. Storing them raw would mean a
 -- database dump is a set of live 30-day sessions.
-CREATE TABLE IF NOT EXISTS refresh_token (
+CREATE TABLE IF NOT EXISTS ls_refresh_token (
   id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id    BIGINT UNSIGNED NOT NULL,
   token_hash CHAR(64) NOT NULL,
@@ -224,9 +224,9 @@ CREATE TABLE IF NOT EXISTS refresh_token (
   user_agent VARCHAR(255) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_refresh_hash (token_hash),
-  KEY idx_refresh_user (user_id, revoked_at),
-  CONSTRAINT fk_refresh_user FOREIGN KEY (user_id) REFERENCES app_user (id) ON DELETE CASCADE
+  UNIQUE KEY uq_ls_refresh_hash (token_hash),
+  KEY idx_ls_refresh_user (user_id, revoked_at),
+  CONSTRAINT fk_ls_refresh_user FOREIGN KEY (user_id) REFERENCES ls_user (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -234,7 +234,7 @@ CREATE TABLE IF NOT EXISTS refresh_token (
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- Privacy policy, terms, and anything else an admin edits as free text.
-CREATE TABLE IF NOT EXISTS app_setting (
+CREATE TABLE IF NOT EXISTS ls_app_setting (
   setting_key VARCHAR(100) NOT NULL,
   value       LONGTEXT     NULL,
   updated_by  BIGINT UNSIGNED NULL,
@@ -245,7 +245,7 @@ CREATE TABLE IF NOT EXISTS app_setting (
 -- Who activated which student, who generated which batch of codes. Codes are
 -- worth money to a school; "nobody knows who issued these 500" is not an
 -- acceptable answer.
-CREATE TABLE IF NOT EXISTS audit_log (
+CREATE TABLE IF NOT EXISTS ls_audit_log (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   actor_id    BIGINT UNSIGNED NULL,
   action      VARCHAR(64)  NOT NULL,
@@ -254,6 +254,6 @@ CREATE TABLE IF NOT EXISTS audit_log (
   detail      LONGTEXT     NULL,
   created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  KEY idx_audit_actor (actor_id, created_at),
-  KEY idx_audit_entity (entity_type, entity_id)
+  KEY idx_ls_audit_actor (actor_id, created_at),
+  KEY idx_ls_audit_entity (entity_type, entity_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

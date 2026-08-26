@@ -60,7 +60,7 @@ export async function requestOtp(identifier) {
 
   // Cooldown, so the endpoint cannot be used to bombard someone's phone.
   const recent = await one(
-    `SELECT created_at FROM otp_challenge
+    `SELECT created_at FROM ls_otp_challenge
       WHERE identifier = ?
         AND created_at > (NOW() - INTERVAL ? SECOND)
       ORDER BY id DESC LIMIT 1`,
@@ -76,13 +76,13 @@ export async function requestOtp(identifier) {
   // Any earlier live challenge is burned. Two valid codes at once doubles the
   // guessing surface for no benefit.
   await execute(
-    'UPDATE otp_challenge SET consumed_at = NOW() WHERE identifier = ? AND consumed_at IS NULL',
+    'UPDATE ls_otp_challenge SET consumed_at = NOW() WHERE identifier = ? AND consumed_at IS NULL',
     [id.value],
   );
 
   const code = generateOtp();
   await execute(
-    `INSERT INTO otp_challenge (identifier, channel, code_hash, expires_at)
+    `INSERT INTO ls_otp_challenge (identifier, channel, code_hash, expires_at)
      VALUES (?, ?, ?, (NOW() + INTERVAL ? SECOND))`,
     [id.value, id.channel, sha256(code), OTP.TTL_SECONDS],
   );
@@ -110,7 +110,7 @@ export async function verifyOtp(identifier, code) {
 
   const challenge = await one(
     `SELECT id, code_hash, attempts, expires_at
-       FROM otp_challenge
+       FROM ls_otp_challenge
       WHERE identifier = ? AND consumed_at IS NULL
       ORDER BY id DESC LIMIT 1`,
     [id.value],
@@ -120,16 +120,16 @@ export async function verifyOtp(identifier, code) {
     throw Object.assign(new Error('Request a new code'), { status: 400, code: 'OTP_NOT_FOUND' });
   }
   if (new Date(challenge.expires_at) < new Date()) {
-    await execute('UPDATE otp_challenge SET consumed_at = NOW() WHERE id = ?', [challenge.id]);
+    await execute('UPDATE ls_otp_challenge SET consumed_at = NOW() WHERE id = ?', [challenge.id]);
     throw Object.assign(new Error('That code has expired'), { status: 400, code: 'OTP_EXPIRED' });
   }
   if (challenge.attempts >= OTP.MAX_ATTEMPTS) {
-    await execute('UPDATE otp_challenge SET consumed_at = NOW() WHERE id = ?', [challenge.id]);
+    await execute('UPDATE ls_otp_challenge SET consumed_at = NOW() WHERE id = ?', [challenge.id]);
     throw Object.assign(new Error('Too many attempts — request a new code'), { status: 429, code: 'OTP_LOCKED' });
   }
 
   if (sha256(String(code || '').trim()) !== challenge.code_hash) {
-    await execute('UPDATE otp_challenge SET attempts = attempts + 1 WHERE id = ?', [challenge.id]);
+    await execute('UPDATE ls_otp_challenge SET attempts = attempts + 1 WHERE id = ?', [challenge.id]);
     const left = OTP.MAX_ATTEMPTS - (challenge.attempts + 1);
     throw Object.assign(
       new Error(left > 0 ? `Incorrect code — ${left} attempt${left === 1 ? '' : 's'} left` : 'Incorrect code'),
@@ -138,7 +138,7 @@ export async function verifyOtp(identifier, code) {
   }
 
   // Single-use: consumed the moment it succeeds.
-  await execute('UPDATE otp_challenge SET consumed_at = NOW() WHERE id = ?', [challenge.id]);
+  await execute('UPDATE ls_otp_challenge SET consumed_at = NOW() WHERE id = ?', [challenge.id]);
 
   return id;
 }
@@ -214,7 +214,7 @@ async function deliverEmail(to, code) {
 /** Housekeeping. Consumed and expired challenges have no value after the day. */
 export async function purgeOldChallenges(days = 7) {
   const res = await execute(
-    'DELETE FROM otp_challenge WHERE created_at < (NOW() - INTERVAL ? DAY)',
+    'DELETE FROM ls_otp_challenge WHERE created_at < (NOW() - INTERVAL ? DAY)',
     [days],
   );
   return res.affectedRows;

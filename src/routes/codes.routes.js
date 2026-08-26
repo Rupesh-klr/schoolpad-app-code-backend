@@ -32,9 +32,9 @@ router.get('/', asyncHandler(async (req, res) => {
   if (batchId)  { where.push('ac.batch_id = ?');  params.push(batchId); }
 
   const from = `
-       FROM access_code ac
-       LEFT JOIN school s   ON s.id = ac.school_id
-       LEFT JOIN app_user u ON u.id = ac.used_by
+       FROM ls_access_code ac
+       LEFT JOIN ls_school s   ON s.id = ac.school_id
+       LEFT JOIN ls_user u ON u.id = ac.used_by
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}`;
 
   const rows = await query(
@@ -65,7 +65,7 @@ router.post('/generate', asyncHandler(async (req, res) => {
   });
 
   await execute(
-    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, detail)
+    `INSERT INTO ls_audit_log (actor_id, action, entity_type, entity_id, detail)
      VALUES (?, 'code.generate', 'batch', ?, ?)`,
     [req.user.id, result.batchId, JSON.stringify({ count: result.count, schoolId: body.schoolId, classLevel: body.classLevel })],
   );
@@ -76,7 +76,7 @@ router.post('/generate', asyncHandler(async (req, res) => {
 router.patch('/:id/status', asyncHandler(async (req, res) => {
   const { status } = z.object({ status: z.enum(['unused', 'inactive']) }).parse(req.body);
 
-  const code = await one('SELECT id, status FROM access_code WHERE id = ?', [req.params.id]);
+  const code = await one('SELECT id, status FROM ls_access_code WHERE id = ?', [req.params.id]);
   if (!code) throw Object.assign(new Error('Code not found'), { status: 404 });
   if (code.status === 'used') {
     throw Object.assign(
@@ -85,7 +85,7 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
     );
   }
 
-  await execute('UPDATE access_code SET status = ? WHERE id = ?', [status, req.params.id]);
+  await execute('UPDATE ls_access_code SET status = ? WHERE id = ?', [status, req.params.id]);
   res.json({ id: Number(req.params.id), status });
 }));
 
@@ -131,29 +131,29 @@ router.post('/share', asyncHandler(async (req, res) => {
   const rows = body.batchId
     ? await query(
         `SELECT ac.code, ac.class_level, s.name AS school_name
-           FROM access_code ac LEFT JOIN school s ON s.id = ac.school_id
+           FROM ls_access_code ac LEFT JOIN ls_school s ON s.id = ac.school_id
           WHERE ac.batch_id = ? ORDER BY ac.id`, [body.batchId])
     : await query(
         `SELECT ac.code, ac.class_level, s.name AS school_name
-           FROM access_code ac LEFT JOIN school s ON s.id = ac.school_id
+           FROM ls_access_code ac LEFT JOIN ls_school s ON s.id = ac.school_id
           WHERE ac.id IN (${body.ids.map(() => '?').join(',')}) ORDER BY ac.id`, body.ids);
 
   if (!rows.length) throw Object.assign(new Error('No codes matched'), { status: 404 });
 
-  const school = body.schoolName || rows[0].school_name || null;
+  const ls_school = body.schoolName || rows[0].school_name || null;
   const codes = rows.map((r) => r.code);
   const classLevel = rows[0].class_level;
 
   res.json({
     count: codes.length,
     format: body.format,
-    ...render(body.format, { codes, school, classLevel }),
+    ...render(body.format, { codes, ls_school, classLevel }),
   });
 }));
 
-function render(format, { codes, school, classLevel }) {
+function render(format, { codes, ls_school, classLevel }) {
   const heading = [
-    school ? `School: ${school}` : null,
+    ls_school ? `School: ${ls_school}` : null,
     classLevel ? `Class: ${classLevel}` : null,
     `Codes: ${codes.length}`,
   ].filter(Boolean);
@@ -179,7 +179,7 @@ function render(format, { codes, school, classLevel }) {
 
     case 'email':
       return {
-        subject: `Access codes${school ? ` for ${school}` : ''} (${codes.length})`,
+        subject: `Access codes${ls_school ? ` for ${ls_school}` : ''} (${codes.length})`,
         text: [
           'Hello,',
           '',
@@ -199,7 +199,7 @@ function render(format, { codes, school, classLevel }) {
       // float and renders 1234567890 as 1.23457E+09, destroying the code.
       return {
         filename: `access-codes-${new Date().toISOString().slice(0, 10)}.csv`,
-        text: ['code,school,class', ...codes.map((c) => `"${c}","${school || ''}","${classLevel || ''}"`)].join('\r\n'),
+        text: ['code,ls_school,class', ...codes.map((c) => `"${c}","${ls_school || ''}","${classLevel || ''}"`)].join('\r\n'),
       };
 
     case 'plain':

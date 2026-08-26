@@ -41,7 +41,7 @@ export async function issueRefreshToken(userId, userAgent = null) {
   const expiresAt = new Date(Date.now() + parseDuration(config.jwt.refreshExpiresIn));
 
   await execute(
-    `INSERT INTO refresh_token (user_id, token_hash, expires_at, user_agent)
+    `INSERT INTO ls_refresh_token (user_id, token_hash, expires_at, user_agent)
      VALUES (?, ?, ?, ?)`,
     [userId, sha256(raw), expiresAt, userAgent ? String(userAgent).slice(0, 255) : null],
   );
@@ -60,8 +60,8 @@ export async function rotateRefreshToken(raw, userAgent = null) {
   const row = await one(
     `SELECT rt.id, rt.user_id, rt.revoked_at, rt.expires_at,
             u.role, u.status
-       FROM refresh_token rt
-       JOIN app_user u ON u.id = rt.user_id
+       FROM ls_refresh_token rt
+       JOIN ls_user u ON u.id = rt.user_id
       WHERE rt.token_hash = ?`,
     [sha256(raw)],
   );
@@ -71,7 +71,7 @@ export async function rotateRefreshToken(raw, userAgent = null) {
   if (new Date(row.expires_at) < new Date()) throw unauthorized('Refresh token expired');
   if (row.status === 'inactive') throw unauthorized('Account is deactivated');
 
-  await execute('UPDATE refresh_token SET revoked_at = NOW() WHERE id = ?', [row.id]);
+  await execute('UPDATE ls_refresh_token SET revoked_at = NOW() WHERE id = ?', [row.id]);
 
   const user = { id: row.user_id, role: row.role, status: row.status };
   return {
@@ -84,7 +84,7 @@ export async function rotateRefreshToken(raw, userAgent = null) {
 /** Sign out one device. */
 export async function revokeRefreshToken(raw) {
   await execute(
-    'UPDATE refresh_token SET revoked_at = NOW() WHERE token_hash = ? AND revoked_at IS NULL',
+    'UPDATE ls_refresh_token SET revoked_at = NOW() WHERE token_hash = ? AND revoked_at IS NULL',
     [sha256(raw)],
   );
 }
@@ -92,7 +92,7 @@ export async function revokeRefreshToken(raw) {
 /** Sign out everywhere — used when an admin deactivates an account. */
 export async function revokeAllForUser(userId) {
   const res = await execute(
-    'UPDATE refresh_token SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL',
+    'UPDATE ls_refresh_token SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL',
     [userId],
   );
   return res.affectedRows;

@@ -15,35 +15,35 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
   // One round trip per metric would be five; this is one query per table with
   // conditional aggregates, which the indexes already cover.
   const [schools] = await query(
-    `SELECT COUNT(*) AS total, SUM(status = 'active') AS active FROM school`,
+    `SELECT COUNT(*) AS total, SUM(status = 'active') AS active FROM ls_school`,
   );
   const [students] = await query(
     `SELECT COUNT(*) AS total,
             SUM(status = 'active')   AS active,
             SUM(status = 'pending')  AS pending,
             SUM(status = 'inactive') AS inactive
-       FROM app_user WHERE role = ?`, [ROLES.STUDENT],
+       FROM ls_user WHERE role = ?`, [ROLES.STUDENT],
   );
   const [codes] = await query(
     `SELECT COUNT(*) AS total,
             SUM(status = 'used')     AS used,
             SUM(status = 'unused')   AS unused,
             SUM(status = 'inactive') AS inactive
-       FROM access_code`,
+       FROM ls_access_code`,
   );
   const [parents] = await query(
-    `SELECT COUNT(*) AS total FROM app_user WHERE role = ?`, [ROLES.PARENT],
+    `SELECT COUNT(*) AS total FROM ls_user WHERE role = ?`, [ROLES.PARENT],
   );
   const [content] = await query(
-    `SELECT (SELECT COUNT(*) FROM content_node) AS nodes,
-            (SELECT COUNT(*) FROM content_item) AS items`,
+    `SELECT (SELECT COUNT(*) FROM ls_content_node) AS nodes,
+            (SELECT COUNT(*) FROM ls_content_item) AS items`,
   );
 
   const recentStudents = await query(
     `SELECT u.id, u.full_name, u.status, u.created_at, s.name AS school_name, sp.class_level
-       FROM app_user u
-       LEFT JOIN student_profile sp ON sp.user_id = u.id
-       LEFT JOIN school s           ON s.id = sp.school_id
+       FROM ls_user u
+       LEFT JOIN ls_student_profile sp ON sp.user_id = u.id
+       LEFT JOIN ls_school s           ON s.id = sp.school_id
       WHERE u.role = ?
       ORDER BY u.created_at DESC LIMIT 8`, [ROLES.STUDENT],
   );
@@ -67,7 +67,7 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
 router.get('/users', asyncHandler(async (req, res) => {
   const rows = await query(
     `SELECT id, full_name, email, status, created_at, last_login_at
-       FROM app_user WHERE role = ? ORDER BY created_at`, [ROLES.ADMIN],
+       FROM ls_user WHERE role = ? ORDER BY created_at`, [ROLES.ADMIN],
   );
   res.json({
     admins: rows.map((r) => ({
@@ -89,7 +89,7 @@ router.post('/users', asyncHandler(async (req, res) => {
   // The UNIQUE index would catch this anyway, but the generic duplicate error
   // does not say *why* — and "this email is already a student" is the one
   // explanation an admin needs to understand the role-exclusivity rule.
-  const clash = await one('SELECT role FROM app_user WHERE email = ?', [email]);
+  const clash = await one('SELECT role FROM ls_user WHERE email = ?', [email]);
   if (clash) {
     throw Object.assign(
       new Error(`That email is already registered as a ${clash.role} account. One email, one role.`),
@@ -98,13 +98,13 @@ router.post('/users', asyncHandler(async (req, res) => {
   }
 
   const result = await execute(
-    `INSERT INTO app_user (role, email, full_name, password_hash, status, activated_at, activated_by)
+    `INSERT INTO ls_user (role, email, full_name, password_hash, status, activated_at, activated_by)
      VALUES (?, ?, ?, ?, ?, NOW(), ?)`,
     [ROLES.ADMIN, email, body.fullName, await hashPassword(body.password), USER_STATUS.ACTIVE, req.user.id],
   );
 
   await execute(
-    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, detail)
+    `INSERT INTO ls_audit_log (actor_id, action, entity_type, entity_id, detail)
      VALUES (?, 'admin.create', 'app_user', ?, ?)`,
     [req.user.id, String(result.insertId), JSON.stringify({ email })],
   );
@@ -126,7 +126,7 @@ router.patch('/users/:id/status', asyncHandler(async (req, res) => {
   // way back in short of editing the database by hand.
   if (status === USER_STATUS.INACTIVE) {
     const [{ n }] = await query(
-      `SELECT COUNT(*) AS n FROM app_user WHERE role = ? AND status = ? AND id <> ?`,
+      `SELECT COUNT(*) AS n FROM ls_user WHERE role = ? AND status = ? AND id <> ?`,
       [ROLES.ADMIN, USER_STATUS.ACTIVE, req.params.id],
     );
     if (Number(n) === 0) {
@@ -138,7 +138,7 @@ router.patch('/users/:id/status', asyncHandler(async (req, res) => {
   }
 
   const result = await execute(
-    'UPDATE app_user SET status = ? WHERE id = ? AND role = ?',
+    'UPDATE ls_user SET status = ? WHERE id = ? AND role = ?',
     [status, req.params.id, ROLES.ADMIN],
   );
   if (!result.affectedRows) throw Object.assign(new Error('Admin not found'), { status: 404 });
@@ -152,7 +152,7 @@ router.post('/users/:id/password', asyncHandler(async (req, res) => {
   const { newPassword } = z.object({ newPassword: z.string().min(PASSWORD.MIN_LENGTH) }).parse(req.body);
 
   const result = await execute(
-    'UPDATE app_user SET password_hash = ? WHERE id = ? AND role = ?',
+    'UPDATE ls_user SET password_hash = ? WHERE id = ? AND role = ?',
     [await hashPassword(newPassword), req.params.id, ROLES.ADMIN],
   );
   if (!result.affectedRows) throw Object.assign(new Error('Admin not found'), { status: 404 });
@@ -162,7 +162,7 @@ router.post('/users/:id/password', asyncHandler(async (req, res) => {
   const revoked = await revokeAllForUser(req.params.id);
 
   await execute(
-    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id) VALUES (?, 'admin.password_reset', 'app_user', ?)`,
+    `INSERT INTO ls_audit_log (actor_id, action, entity_type, entity_id) VALUES (?, 'admin.password_reset', 'app_user', ?)`,
     [req.user.id, String(req.params.id)],
   );
 
@@ -172,7 +172,7 @@ router.post('/users/:id/password', asyncHandler(async (req, res) => {
 // ─── Settings — privacy policy, terms, anything free-text ────────────────────
 
 router.get('/settings', asyncHandler(async (req, res) => {
-  const rows = await query('SELECT setting_key, value, updated_at FROM app_setting');
+  const rows = await query('SELECT setting_key, value, updated_at FROM ls_app_setting');
   res.json({ settings: Object.fromEntries(rows.map((r) => [r.setting_key, { value: r.value, updatedAt: r.updated_at }])) });
 }));
 
@@ -181,7 +181,7 @@ router.put('/settings/:key', asyncHandler(async (req, res) => {
   const key = z.string().max(100).regex(/^[a-z0-9_.]+$/).parse(req.params.key);
 
   await execute(
-    `INSERT INTO app_setting (setting_key, value, updated_by) VALUES (?, ?, ?)
+    `INSERT INTO ls_app_setting (setting_key, value, updated_by) VALUES (?, ?, ?)
      ON DUPLICATE KEY UPDATE value = VALUES(value), updated_by = VALUES(updated_by)`,
     [key, value, req.user.id],
   );
@@ -194,7 +194,7 @@ router.get('/audit', asyncHandler(async (req, res) => {
   const rows = await query(
     `SELECT a.id, a.action, a.entity_type, a.entity_id, a.detail, a.created_at,
             u.full_name AS actor_name, u.email AS actor_email
-       FROM audit_log a LEFT JOIN app_user u ON u.id = a.actor_id
+       FROM ls_audit_log a LEFT JOIN ls_user u ON u.id = a.actor_id
       ORDER BY a.id DESC LIMIT ${limit}`,
   );
   res.json({

@@ -33,10 +33,10 @@ router.get('/', asyncHandler(async (req, res) => {
   if (status)      { where.push('u.status = ?');       params.push(status); }
 
   const from = `
-       FROM app_user u
-       LEFT JOIN student_profile sp ON sp.user_id = u.id
-       LEFT JOIN school s           ON s.id = sp.school_id
-       LEFT JOIN access_code ac     ON ac.id = sp.access_code_id
+       FROM ls_user u
+       LEFT JOIN ls_student_profile sp ON sp.user_id = u.id
+       LEFT JOIN ls_school s           ON s.id = sp.school_id
+       LEFT JOIN ls_access_code ac     ON ac.id = sp.access_code_id
       WHERE ${where.join(' AND ')}`;
 
   const rows = await query(
@@ -58,10 +58,10 @@ router.get('/:id', asyncHandler(async (req, res) => {
     `SELECT u.id, u.full_name, u.email, u.phone, u.status, u.created_at, u.last_login_at,
             u.activated_at, sp.class_level, sp.section, sp.school_id,
             s.name AS school_name, ac.code AS access_code, ac.used_at AS code_used_at
-       FROM app_user u
-       LEFT JOIN student_profile sp ON sp.user_id = u.id
-       LEFT JOIN school s           ON s.id = sp.school_id
-       LEFT JOIN access_code ac     ON ac.id = sp.access_code_id
+       FROM ls_user u
+       LEFT JOIN ls_student_profile sp ON sp.user_id = u.id
+       LEFT JOIN ls_school s           ON s.id = sp.school_id
+       LEFT JOIN ls_access_code ac     ON ac.id = sp.access_code_id
       WHERE u.id = ? AND u.role = ?`,
     [req.params.id, ROLES.STUDENT],
   );
@@ -69,14 +69,14 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
   const guardians = await query(
     `SELECT u.id, u.full_name, u.email, u.phone, pl.relation
-       FROM parent_link pl JOIN app_user u ON u.id = pl.parent_user_id
+       FROM ls_parent_link pl JOIN ls_user u ON u.id = pl.parent_user_id
       WHERE pl.student_user_id = ?`,
     [req.params.id],
   );
 
   const [progress] = await query(
     `SELECT COUNT(*) AS items_started, SUM(status = 'completed') AS items_completed
-       FROM content_progress WHERE user_id = ?`,
+       FROM ls_content_progress WHERE user_id = ?`,
     [req.params.id],
   );
 
@@ -105,11 +105,11 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
     status: z.enum([USER_STATUS.ACTIVE, USER_STATUS.INACTIVE, USER_STATUS.PENDING]),
   }).parse(req.body);
 
-  const student = await one('SELECT id, status FROM app_user WHERE id = ? AND role = ?', [req.params.id, ROLES.STUDENT]);
+  const student = await one('SELECT id, status FROM ls_user WHERE id = ? AND role = ?', [req.params.id, ROLES.STUDENT]);
   if (!student) throw Object.assign(new Error('Student not found'), { status: 404 });
 
   await execute(
-    `UPDATE app_user
+    `UPDATE ls_user
         SET status = ?,
             activated_at = ${status === USER_STATUS.ACTIVE ? 'COALESCE(activated_at, NOW())' : 'activated_at'},
             activated_by = ?
@@ -121,7 +121,7 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
   if (status === USER_STATUS.INACTIVE) revoked = await revokeAllForUser(req.params.id);
 
   await execute(
-    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, detail)
+    `INSERT INTO ls_audit_log (actor_id, action, entity_type, entity_id, detail)
      VALUES (?, ?, 'app_user', ?, ?)`,
     [req.user.id, `student.${status}`, String(req.params.id), JSON.stringify({ from: student.status })],
   );
@@ -129,7 +129,7 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
   res.json({ id: Number(req.params.id), status, sessionsRevoked: revoked });
 }));
 
-/** Correct a student's school, class or section after registration. */
+/** Correct a student's ls_school, class or section after registration. */
 router.put('/:id/profile', asyncHandler(async (req, res) => {
   const body = z.object({
     schoolId: z.coerce.number().int().positive().nullable().optional(),
@@ -139,7 +139,7 @@ router.put('/:id/profile', asyncHandler(async (req, res) => {
   }).parse(req.body);
 
   if (body.fullName) {
-    await execute('UPDATE app_user SET full_name = ? WHERE id = ? AND role = ?', [body.fullName, req.params.id, ROLES.STUDENT]);
+    await execute('UPDATE ls_user SET full_name = ? WHERE id = ? AND role = ?', [body.fullName, req.params.id, ROLES.STUDENT]);
   }
 
   const map = { schoolId: 'school_id', classLevel: 'class_level', section: 'section' };
@@ -150,11 +150,11 @@ router.put('/:id/profile', asyncHandler(async (req, res) => {
   }
   if (sets.length) {
     params.push(req.params.id);
-    await execute(`UPDATE student_profile SET ${sets.join(', ')} WHERE user_id = ?`, params);
+    await execute(`UPDATE ls_student_profile SET ${sets.join(', ')} WHERE user_id = ?`, params);
   }
 
   await execute(
-    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, detail)
+    `INSERT INTO ls_audit_log (actor_id, action, entity_type, entity_id, detail)
      VALUES (?, 'student.profile_update', 'app_user', ?, ?)`,
     [req.user.id, String(req.params.id), JSON.stringify(body)],
   );
@@ -173,7 +173,7 @@ function shape(r) {
     section: r.section,
     schoolId: r.school_id,
     schoolName: r.school_name,
-    accessCode: r.access_code,
+    accessCode: r.ls_access_code,
     registeredAt: r.created_at,
     lastLoginAt: r.last_login_at,
   };

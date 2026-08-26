@@ -43,13 +43,13 @@ async function main() {
   }
 
   const email = config.seedAdmin.email.toLowerCase();
-  let admin = await one('SELECT id FROM app_user WHERE email = ?', [email]);
+  let admin = await one('SELECT id FROM ls_user WHERE email = ?', [email]);
 
   if (admin) {
     console.log(`  ▸ admin        ${email} (already exists, left untouched)`);
   } else {
     const res = await execute(
-      `INSERT INTO app_user (role, email, full_name, password_hash, status, activated_at)
+      `INSERT INTO ls_user (role, email, full_name, password_hash, status, activated_at)
        VALUES (?, ?, ?, ?, ?, NOW())`,
       [ROLES.ADMIN, email, config.seedAdmin.name, await hashPassword(config.seedAdmin.password), USER_STATUS.ACTIVE],
     );
@@ -60,10 +60,10 @@ async function main() {
   // ── Schools ────────────────────────────────────────────────────────────────
   const schoolIds = [];
   for (const s of SCHOOLS) {
-    const existing = await one('SELECT id FROM school WHERE code = ?', [s.code]);
+    const existing = await one('SELECT id FROM ls_school WHERE code = ?', [s.code]);
     if (existing) { schoolIds.push(existing.id); continue; }
     const res = await execute(
-      `INSERT INTO school (name, code, address, contact_person, phone, email, status)
+      `INSERT INTO ls_school (name, code, address, contact_person, phone, email, status)
        VALUES (?, ?, ?, ?, ?, ?, 'active')`,
       [s.name, s.code, `${s.name}, Demo Address`, s.contact, s.phone, s.email],
     );
@@ -77,11 +77,11 @@ async function main() {
 
   for (const classLevel of [6, 7]) {
     let classNode = await one(
-      "SELECT id FROM content_node WHERE node_type = 'class' AND class_level = ?", [classLevel],
+      "SELECT id FROM ls_content_node WHERE node_type = 'class' AND class_level = ?", [classLevel],
     );
     if (!classNode) {
       const res = await execute(
-        `INSERT INTO content_node (parent_id, node_type, title, class_level, sort_order, created_by)
+        `INSERT INTO ls_content_node (parent_id, node_type, title, class_level, sort_order, created_by)
          VALUES (NULL, 'class', ?, ?, ?, ?)`,
         [`Class ${classLevel}`, classLevel, classLevel, admin.id],
       );
@@ -91,11 +91,11 @@ async function main() {
 
     for (const [i, subject] of SUBJECTS.entries()) {
       let subjectNode = await one(
-        "SELECT id FROM content_node WHERE parent_id = ? AND title = ?", [classNode.id, subject],
+        "SELECT id FROM ls_content_node WHERE parent_id = ? AND title = ?", [classNode.id, subject],
       );
       if (!subjectNode) {
         const res = await execute(
-          `INSERT INTO content_node (parent_id, node_type, title, class_level, sort_order, created_by)
+          `INSERT INTO ls_content_node (parent_id, node_type, title, class_level, sort_order, created_by)
            VALUES (?, 'subject', ?, ?, ?, ?)`,
           [classNode.id, subject, classLevel, i, admin.id],
         );
@@ -105,10 +105,10 @@ async function main() {
 
       // One chapter with one topic, so every level of the tree has something
       // in it and the app's navigation can be exercised end to end.
-      let chapter = await one("SELECT id FROM content_node WHERE parent_id = ? LIMIT 1", [subjectNode.id]);
+      let chapter = await one("SELECT id FROM ls_content_node WHERE parent_id = ? LIMIT 1", [subjectNode.id]);
       if (!chapter) {
         const res = await execute(
-          `INSERT INTO content_node (parent_id, node_type, title, class_level, sort_order, created_by)
+          `INSERT INTO ls_content_node (parent_id, node_type, title, class_level, sort_order, created_by)
            VALUES (?, 'chapter', ?, ?, 0, ?)`,
           [subjectNode.id, `Chapter 1 — Introduction to ${subject}`, classLevel, admin.id],
         );
@@ -116,10 +116,10 @@ async function main() {
         nodeCount += 1;
       }
 
-      let topic = await one("SELECT id FROM content_node WHERE parent_id = ? LIMIT 1", [chapter.id]);
+      let topic = await one("SELECT id FROM ls_content_node WHERE parent_id = ? LIMIT 1", [chapter.id]);
       if (!topic) {
         const res = await execute(
-          `INSERT INTO content_node (parent_id, node_type, title, class_level, sort_order, created_by)
+          `INSERT INTO ls_content_node (parent_id, node_type, title, class_level, sort_order, created_by)
            VALUES (?, 'topic', ?, ?, 0, ?)`,
           [chapter.id, 'Topic 1.1 — Getting started', classLevel, admin.id],
         );
@@ -127,12 +127,12 @@ async function main() {
         nodeCount += 1;
       }
 
-      const hasItems = await one('SELECT id FROM content_item WHERE node_id = ? LIMIT 1', [topic.id]);
+      const hasItems = await one('SELECT id FROM ls_content_item WHERE node_id = ? LIMIT 1', [topic.id]);
       if (!hasItems) {
         // Links, not uploaded files: a seed that writes 200MB of video into
         // ./uploads makes a fresh clone slow and the repo unclonable.
         await execute(
-          `INSERT INTO content_item (node_id, item_type, title, description, url, sort_order, created_by)
+          `INSERT INTO ls_content_item (node_id, item_type, title, description, url, sort_order, created_by)
            VALUES (?, 'link', ?, ?, ?, 0, ?)`,
           [topic.id, `${subject} — overview`, 'Sample link content for development.',
            'https://example.com/lesson', admin.id],
@@ -144,7 +144,7 @@ async function main() {
   console.log(`  ▸ content      ${nodeCount} folders, ${itemCount} items`);
 
   // ── Access codes ───────────────────────────────────────────────────────────
-  const [{ n }] = await query('SELECT COUNT(*) AS n FROM access_code');
+  const [{ n }] = await query('SELECT COUNT(*) AS n FROM ls_access_code');
   if (Number(n) === 0) {
     const batch = await generateBatch({ count: 20, schoolId: schoolIds[0], classLevel: 6, createdBy: admin.id });
     console.log(`  ▸ codes        ${batch.count} generated for ${SCHOOLS[0].name}, class 6`);
@@ -156,7 +156,7 @@ async function main() {
   // ── Legal placeholders ─────────────────────────────────────────────────────
   for (const key of ['privacy_policy', 'terms_conditions']) {
     await execute(
-      `INSERT INTO app_setting (setting_key, value, updated_by) VALUES (?, ?, ?)
+      `INSERT INTO ls_app_setting (setting_key, value, updated_by) VALUES (?, ?, ?)
        ON DUPLICATE KEY UPDATE setting_key = setting_key`,
       [key, `# ${key.replace('_', ' ')}\n\nReplace this from Settings in the admin dashboard.`, admin.id],
     );

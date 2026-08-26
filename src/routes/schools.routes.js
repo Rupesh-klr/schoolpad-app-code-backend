@@ -40,31 +40,31 @@ router.get('/', asyncHandler(async (req, res) => {
   // count comes back inflated by the other table's cardinality.
   const rows = await query(
     `SELECT s.*,
-            (SELECT COUNT(*) FROM student_profile sp WHERE sp.school_id = s.id) AS student_count,
-            (SELECT COUNT(*) FROM access_code ac WHERE ac.school_id = s.id) AS code_count,
-            (SELECT COUNT(*) FROM access_code ac WHERE ac.school_id = s.id AND ac.status = 'used') AS code_used
-       FROM school s
+            (SELECT COUNT(*) FROM ls_student_profile sp WHERE sp.school_id = s.id) AS student_count,
+            (SELECT COUNT(*) FROM ls_access_code ac WHERE ac.school_id = s.id) AS code_count,
+            (SELECT COUNT(*) FROM ls_access_code ac WHERE ac.school_id = s.id AND ac.status = 'used') AS code_used
+       FROM ls_school s
        ${clause}
       ORDER BY s.name
       LIMIT ${lim} OFFSET ${off}`,
     params,
   );
 
-  const [{ total }] = await query(`SELECT COUNT(*) AS total FROM school s ${clause}`, params);
+  const [{ total }] = await query(`SELECT COUNT(*) AS total FROM ls_school s ${clause}`, params);
 
   res.json({ schools: rows.map(shape), total: Number(total), limit: lim, offset: off });
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const school = await one('SELECT * FROM school WHERE id = ?', [req.params.id]);
-  if (!school) throw Object.assign(new Error('School not found'), { status: 404 });
+  const ls_school = await one('SELECT * FROM ls_school WHERE id = ?', [req.params.id]);
+  if (!ls_school) throw Object.assign(new Error('School not found'), { status: 404 });
 
   const students = await query(
     `SELECT u.id, u.full_name, u.status, u.created_at, u.last_login_at,
             sp.class_level, sp.section, ac.code AS access_code
-       FROM student_profile sp
-       JOIN app_user u        ON u.id = sp.user_id
-       LEFT JOIN access_code ac ON ac.id = sp.access_code_id
+       FROM ls_student_profile sp
+       JOIN ls_user u        ON u.id = sp.user_id
+       LEFT JOIN ls_access_code ac ON ac.id = sp.access_code_id
       WHERE sp.school_id = ?
       ORDER BY sp.class_level, u.full_name
       LIMIT 500`,
@@ -75,15 +75,15 @@ router.get('/:id', asyncHandler(async (req, res) => {
     `SELECT COUNT(*) AS total,
             SUM(status = 'used')   AS used,
             SUM(status = 'unused') AS unused
-       FROM access_code WHERE school_id = ?`,
+       FROM ls_access_code WHERE school_id = ?`,
     [req.params.id],
   );
 
   res.json({
-    school: shape(school),
+    ls_school: shape(ls_school),
     students: students.map((s) => ({
       id: s.id, fullName: s.full_name, status: s.status,
-      classLevel: s.class_level, section: s.section, accessCode: s.access_code,
+      classLevel: s.class_level, section: s.section, accessCode: s.ls_access_code,
       registeredAt: s.created_at, lastLoginAt: s.last_login_at,
     })),
     codes: { total: Number(codes.total), used: Number(codes.used || 0), unused: Number(codes.unused || 0) },
@@ -93,18 +93,18 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const body = schoolBody.parse(req.body);
   const result = await execute(
-    `INSERT INTO school (name, code, address, contact_person, phone, email, status)
+    `INSERT INTO ls_school (name, code, address, contact_person, phone, email, status)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [body.name, body.code, body.address || null, body.contactPerson || null,
      body.phone || null, body.email || null, body.status],
   );
-  await audit(req.user.id, 'school.create', result.insertId, body.name);
-  res.status(201).json({ school: shape(await one('SELECT * FROM school WHERE id = ?', [result.insertId])) });
+  await audit(req.user.id, 'ls_school.create', result.insertId, body.name);
+  res.status(201).json({ ls_school: shape(await one('SELECT * FROM ls_school WHERE id = ?', [result.insertId])) });
 }));
 
 router.put('/:id', asyncHandler(async (req, res) => {
   const body = schoolBody.partial().parse(req.body);
-  const existing = await one('SELECT id FROM school WHERE id = ?', [req.params.id]);
+  const existing = await one('SELECT id FROM ls_school WHERE id = ?', [req.params.id]);
   if (!existing) throw Object.assign(new Error('School not found'), { status: 404 });
 
   const map = {
@@ -119,10 +119,10 @@ router.put('/:id', asyncHandler(async (req, res) => {
   if (!sets.length) throw Object.assign(new Error('Nothing to update'), { status: 400 });
 
   params.push(req.params.id);
-  await execute(`UPDATE school SET ${sets.join(', ')} WHERE id = ?`, params);
-  await audit(req.user.id, 'school.update', req.params.id, JSON.stringify(body));
+  await execute(`UPDATE ls_school SET ${sets.join(', ')} WHERE id = ?`, params);
+  await audit(req.user.id, 'ls_school.update', req.params.id, JSON.stringify(body));
 
-  res.json({ school: shape(await one('SELECT * FROM school WHERE id = ?', [req.params.id])) });
+  res.json({ ls_school: shape(await one('SELECT * FROM ls_school WHERE id = ?', [req.params.id])) });
 }));
 
 /**
@@ -134,9 +134,9 @@ router.put('/:id', asyncHandler(async (req, res) => {
  */
 router.patch('/:id/status', asyncHandler(async (req, res) => {
   const { status } = z.object({ status: z.enum(['active', 'inactive']) }).parse(req.body);
-  const result = await execute('UPDATE school SET status = ? WHERE id = ?', [status, req.params.id]);
+  const result = await execute('UPDATE ls_school SET status = ? WHERE id = ?', [status, req.params.id]);
   if (!result.affectedRows) throw Object.assign(new Error('School not found'), { status: 404 });
-  await audit(req.user.id, `school.${status}`, req.params.id, null);
+  await audit(req.user.id, `ls_school.${status}`, req.params.id, null);
   res.json({ id: Number(req.params.id), status });
 }));
 
@@ -154,7 +154,7 @@ function shape(r) {
 
 async function audit(actorId, action, entityId, detail) {
   await execute(
-    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, detail)
+    `INSERT INTO ls_audit_log (actor_id, action, entity_type, entity_id, detail)
      VALUES (?, ?, 'school', ?, ?)`,
     [actorId, action, String(entityId), detail],
   );

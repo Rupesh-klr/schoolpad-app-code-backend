@@ -29,9 +29,34 @@ a server.
 
 ### Requirements
 
-MySQL 8 or MariaDB 10.5+. A **dedicated database** (`app_learning` by default) —
-this schema owns unprefixed table names and must not share a database with
-another application.
+MySQL 8 or MariaDB 10.5+.
+
+### The `ls_` table prefix
+
+Every table this app owns is prefixed **`ls_`** (learning system), so it shares
+`acastahealthapp` with the Spring backend without colliding — that schema
+already owns `user`, `otp`, `admin_user`, `question` and 13 others.
+
+```
+acastahealthapp
+├── user, otp, question, questionnaire, …     ← Spring backend (17 tables)
+└── ls_user, ls_school, ls_access_code, …     ← this app (12 tables)
+```
+
+The prefix is fixed in `schema.sql` and is not configurable. Note `ls_user` is a
+different table from Spring's `user`; they share nothing.
+
+Constraint names are prefixed too (`fk_ls_*`). Index names are scoped per-table
+in InnoDB, but **foreign-key constraint names are global to the schema** — an
+unprefixed `fk_student_user` would eventually collide with a neighbour.
+
+```bash
+npm run migrate            # creates only ls_ tables; prints which tables belong to whom
+npm run migrate -- --drop  # drops only ls_ tables, never the database
+```
+
+`--drop` deliberately cannot drop the database. Doing so in a shared schema
+would take the Spring backend's data with it.
 
 ---
 

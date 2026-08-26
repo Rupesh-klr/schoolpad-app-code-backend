@@ -41,7 +41,7 @@ router.get('/meta/constants', (req, res) => {
 /** Schools, for the registration dropdown. Active ones only, no counts. */
 router.get('/meta/schools', asyncHandler(async (req, res) => {
   const rows = await query(
-    `SELECT id, name, code FROM school WHERE status = 'active' ORDER BY name`,
+    `SELECT id, name, code FROM ls_school WHERE status = 'active' ORDER BY name`,
   );
   res.json({ schools: rows });
 }));
@@ -57,7 +57,7 @@ router.get('/meta/legal/:key', asyncHandler(async (req, res) => {
   if (!allowed.includes(req.params.key)) {
     return res.status(404).json({ error: 'Unknown document', code: 'NOT_FOUND' });
   }
-  const rows = await query('SELECT value, updated_at FROM app_setting WHERE setting_key = ?', [req.params.key]);
+  const rows = await query('SELECT value, updated_at FROM ls_app_setting WHERE setting_key = ?', [req.params.key]);
   res.json({
     key: req.params.key,
     content: rows[0]?.value || '',

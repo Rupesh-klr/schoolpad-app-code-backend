@@ -9,9 +9,14 @@ import { config } from '../config/index.js';
  * Creates the database if absent, then applies schema.sql.
  *
  *   npm run migrate
- *   npm run migrate -- --drop     # destroy and rebuild (development only)
+ *   npm run migrate -- --drop     # drop this app's ls_ tables and rebuild
  *
  * Every statement in schema.sql is IF NOT EXISTS, so this is safe to re-run.
+ *
+ * This schema shares `acastahealthapp` with the Spring backend, which owns
+ * `user`, `otp`, `question` and a dozen more. Every table here is prefixed
+ * `ls_` so the two cannot collide — and `--drop` drops only those, never the
+ * database. Dropping the database would take the Spring app's data with it.
  */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,6 +25,34 @@ const DROP = process.argv.includes('--drop');
 if (DROP && config.isProd) {
   console.error('✖ --drop refused: NODE_ENV=production');
   process.exit(1);
+}
+
+/** Every ls_ table, children before parents so foreign keys do not block. */
+async function dropOwnTables(conn, database) {
+  const [rows] = await conn.query(
+    `SELECT TABLE_NAME FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA = ? AND TABLE_NAME LIKE 'ls\\_%'`,
+    [database],
+  );
+  const names = rows.map((r) => r.TABLE_NAME || r.table_name);
+
+  if (!names.length) {
+    console.log('  ▸ no ls_ tables to drop');
+    return 0;
+  }
+
+  // Toggling the FK check is what lets one unordered DROP handle a graph with
+  // cycles; working out a safe order per run would be busywork for the same
+  // result. Restored immediately after, whatever happens.
+  await conn.query('SET FOREIGN_KEY_CHECKS = 0');
+  try {
+    for (const name of names) await conn.query(`DROP TABLE IF EXISTS \`${name}\``);
+  } finally {
+    await conn.query('SET FOREIGN_KEY_CHECKS = 1');
+  }
+
+  console.log(`  ▸ dropped ${names.length} ls_ tables: ${names.join(', ')}`);
+  return names.length;
 }
 
 /**
@@ -44,18 +77,26 @@ async function main() {
 
   // Connect without a database selected — it may not exist yet.
   const root = await mysql.createConnection({ host, port, user, password, multipleStatements: false });
-
-  if (DROP) {
-    console.log(`  ▸ dropping database ${database}`);
-    await root.query(`DROP DATABASE IF EXISTS \`${database}\``);
-  }
-
   await root.query(
     `CREATE DATABASE IF NOT EXISTS \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci`,
   );
   await root.end();
 
   const conn = await mysql.createConnection({ host, port, user, password, database });
+
+  // Report the neighbours before touching anything, so a shared database is
+  // visible in the output rather than a surprise later.
+  const [existing] = await conn.query('SHOW TABLES');
+  const all = existing.map((r) => Object.values(r)[0]);
+  const foreign = all.filter((t) => !t.startsWith('ls_'));
+  if (foreign.length) {
+    console.log(`\n  ⓘ ${database} is shared — ${foreign.length} table(s) belong to another app:`);
+    console.log(`    ${foreign.join(', ')}`);
+    console.log('    Those are never touched. This app owns ls_* only.');
+  }
+
+  if (DROP) await dropOwnTables(conn, database);
+
   const sql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   const stmts = statements(sql);
 
@@ -70,11 +111,14 @@ async function main() {
     }
   }
 
-  const [tables] = await conn.query('SHOW TABLES');
+  const [after] = await conn.query('SHOW TABLES');
   await conn.end();
 
-  console.log(`\n  ✔ ${database} — ${stmts.length} statements applied, ${tables.length} tables present`);
-  for (const t of tables) console.log(`      ${Object.values(t)[0]}`);
+  const ours = after.map((t) => Object.values(t)[0]).filter((t) => t.startsWith('ls_'));
+
+  console.log(`\n  ✔ ${database} — ${stmts.length} statements applied`);
+  console.log(`    ${ours.length} ls_ tables owned by this app:`);
+  for (const t of ours) console.log(`      ${t}`);
   console.log('\n  Next: npm run seed\n');
 }
 

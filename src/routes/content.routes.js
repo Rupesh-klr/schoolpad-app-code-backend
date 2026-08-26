@@ -48,7 +48,7 @@ router.get('/my', authenticate, requireActive, asyncHandler(async (req, res) => 
     throw Object.assign(new Error('Only a student account has a content tree'), { status: 403 });
   }
 
-  const profile = await one('SELECT class_level FROM student_profile WHERE user_id = ?', [req.user.id]);
+  const profile = await one('SELECT class_level FROM ls_student_profile WHERE user_id = ?', [req.user.id]);
   const classLevel = profile?.class_level;
   if (!classLevel) {
     throw Object.assign(new Error('No class set on your profile'), { status: 409, code: 'NO_CLASS' });
@@ -56,9 +56,9 @@ router.get('/my', authenticate, requireActive, asyncHandler(async (req, res) => 
 
   const subjects = await query(
     `SELECT n.id, n.title, n.description, n.sort_order,
-            (SELECT COUNT(*) FROM content_node c
+            (SELECT COUNT(*) FROM ls_content_node c
               WHERE c.parent_id = n.id AND c.visibility = 'visible') AS chapter_count
-       FROM content_node n
+       FROM ls_content_node n
       WHERE n.node_type = 'subject'
         AND n.class_level = ?
         AND n.visibility = 'visible'
@@ -69,9 +69,9 @@ router.get('/my', authenticate, requireActive, asyncHandler(async (req, res) => 
   const recent = await query(
     `SELECT i.id, i.title, i.item_type, p.status, p.last_seen_at, p.position_secs,
             n.title AS topic_title
-       FROM content_progress p
-       JOIN content_item i ON i.id = p.item_id
-       JOIN content_node n ON n.id = i.node_id
+       FROM ls_content_progress p
+       JOIN ls_content_item i ON i.id = p.item_id
+       JOIN ls_content_node n ON n.id = i.node_id
       WHERE p.user_id = ? AND i.visibility = 'visible'
       ORDER BY p.last_seen_at DESC
       LIMIT 5`,
@@ -95,12 +95,12 @@ router.get('/nodes/:id/children', authenticate, requireActive, asyncHandler(asyn
   const isAdmin = req.user.role === ROLES.ADMIN;
   const visible = isAdmin ? '' : "AND visibility = 'visible'";
 
-  const node = await one(`SELECT * FROM content_node WHERE id = ? ${visible}`, [req.params.id]);
+  const node = await one(`SELECT * FROM ls_content_node WHERE id = ? ${visible}`, [req.params.id]);
   if (!node) throw Object.assign(new Error('Not found'), { status: 404 });
 
   // A student may only read inside their own class.
   if (!isAdmin) {
-    const profile = await one('SELECT class_level FROM student_profile WHERE user_id = ?', [req.user.id]);
+    const profile = await one('SELECT class_level FROM ls_student_profile WHERE user_id = ?', [req.user.id]);
     if (node.class_level && profile?.class_level !== node.class_level) {
       throw Object.assign(new Error('This is not part of your class'), { status: 403, code: 'WRONG_CLASS' });
     }
@@ -108,7 +108,7 @@ router.get('/nodes/:id/children', authenticate, requireActive, asyncHandler(asyn
 
   const children = await query(
     `SELECT id, node_type, title, description, sort_order, visibility
-       FROM content_node WHERE parent_id = ? ${visible}
+       FROM ls_content_node WHERE parent_id = ? ${visible}
       ORDER BY sort_order, title`,
     [req.params.id],
   );
@@ -117,8 +117,8 @@ router.get('/nodes/:id/children', authenticate, requireActive, asyncHandler(asyn
     `SELECT i.id, i.item_type, i.title, i.description, i.url, i.storage_path,
             i.mime_type, i.duration_secs, i.sort_order, i.visibility,
             p.status AS progress_status, p.position_secs
-       FROM content_item i
-       LEFT JOIN content_progress p ON p.item_id = i.id AND p.user_id = ?
+       FROM ls_content_item i
+       LEFT JOIN ls_content_progress p ON p.item_id = i.id AND p.user_id = ?
       WHERE i.node_id = ? ${isAdmin ? '' : "AND i.visibility = 'visible'"}
       ORDER BY i.sort_order, i.id`,
     [req.user.id, req.params.id],
@@ -140,17 +140,17 @@ router.post('/items/:id/progress', authenticate, requireActive, asyncHandler(asy
     positionSecs: z.coerce.number().int().min(0).default(0),
   }).parse(req.body);
 
-  const item = await one("SELECT id FROM content_item WHERE id = ? AND visibility = 'visible'", [req.params.id]);
+  const item = await one("SELECT id FROM ls_content_item WHERE id = ? AND visibility = 'visible'", [req.params.id]);
   if (!item) throw Object.assign(new Error('Content not found'), { status: 404 });
 
   await execute(
-    `INSERT INTO content_progress (user_id, item_id, status, position_secs, completed_at)
+    `INSERT INTO ls_content_progress (user_id, item_id, status, position_secs, completed_at)
      VALUES (?, ?, ?, ?, ${body.status === 'completed' ? 'NOW()' : 'NULL'})
      ON DUPLICATE KEY UPDATE
        -- Never downgrade: re-opening a finished video must not un-complete it.
-       status       = IF(content_progress.status = 'completed', 'completed', VALUES(status)),
+       status       = IF(ls_content_progress.status = 'completed', 'completed', VALUES(status)),
        position_secs = VALUES(position_secs),
-       completed_at  = COALESCE(content_progress.completed_at, VALUES(completed_at))`,
+       completed_at  = COALESCE(ls_content_progress.completed_at, VALUES(completed_at))`,
     [req.user.id, req.params.id, body.status, body.positionSecs],
   );
 
@@ -165,10 +165,10 @@ const adminOnly = [authenticate, requireAdmin];
 router.get('/tree', adminOnly, asyncHandler(async (req, res) => {
   const nodes = await query(
     `SELECT id, parent_id, node_type, title, class_level, sort_order, visibility
-       FROM content_node ORDER BY sort_order, title`,
+       FROM ls_content_node ORDER BY sort_order, title`,
   );
   const counts = await query(
-    `SELECT node_id, COUNT(*) AS n FROM content_item GROUP BY node_id`,
+    `SELECT node_id, COUNT(*) AS n FROM ls_content_item GROUP BY node_id`,
   );
   const countBy = Object.fromEntries(counts.map((c) => [c.node_id, Number(c.n)]));
 
@@ -205,19 +205,19 @@ router.post('/nodes', adminOnly, asyncHandler(async (req, res) => {
   // lookup. Inheriting it here is what keeps that denormalisation honest.
   let classLevel = body.classLevel ?? null;
   if (body.parentId) {
-    const parent = await one('SELECT class_level FROM content_node WHERE id = ?', [body.parentId]);
+    const parent = await one('SELECT class_level FROM ls_content_node WHERE id = ?', [body.parentId]);
     if (!parent) throw Object.assign(new Error('Parent node not found'), { status: 404 });
     classLevel = classLevel ?? parent.class_level;
   }
 
   const result = await execute(
-    `INSERT INTO content_node (parent_id, node_type, title, description, class_level, sort_order, visibility, created_by)
+    `INSERT INTO ls_content_node (parent_id, node_type, title, description, class_level, sort_order, visibility, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [body.parentId ?? null, body.nodeType, body.title, body.description ?? null,
      classLevel, body.sortOrder, body.visibility, req.user.id],
   );
 
-  res.status(201).json({ node: await one('SELECT * FROM content_node WHERE id = ?', [result.insertId]) });
+  res.status(201).json({ node: await one('SELECT * FROM ls_content_node WHERE id = ?', [result.insertId]) });
 }));
 
 router.put('/nodes/:id', adminOnly, asyncHandler(async (req, res) => {
@@ -249,21 +249,21 @@ router.put('/nodes/:id', adminOnly, asyncHandler(async (req, res) => {
   if (!sets.length) throw Object.assign(new Error('Nothing to update'), { status: 400 });
 
   params.push(req.params.id);
-  await execute(`UPDATE content_node SET ${sets.join(', ')} WHERE id = ?`, params);
-  res.json({ node: await one('SELECT * FROM content_node WHERE id = ?', [req.params.id]) });
+  await execute(`UPDATE ls_content_node SET ${sets.join(', ')} WHERE id = ?`, params);
+  res.json({ node: await one('SELECT * FROM ls_content_node WHERE id = ?', [req.params.id]) });
 }));
 
 router.delete('/nodes/:id', adminOnly, asyncHandler(async (req, res) => {
   // ON DELETE CASCADE takes the whole subtree and its items. Report the count
   // so the dashboard can say what actually went, rather than "deleted".
   const [{ n }] = await query(
-    `SELECT COUNT(*) AS n FROM content_item WHERE node_id = ?`, [req.params.id],
+    `SELECT COUNT(*) AS n FROM ls_content_item WHERE node_id = ?`, [req.params.id],
   );
-  const result = await execute('DELETE FROM content_node WHERE id = ?', [req.params.id]);
+  const result = await execute('DELETE FROM ls_content_node WHERE id = ?', [req.params.id]);
   if (!result.affectedRows) throw Object.assign(new Error('Not found'), { status: 404 });
 
   await execute(
-    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, detail)
+    `INSERT INTO ls_audit_log (actor_id, action, entity_type, entity_id, detail)
      VALUES (?, 'content.delete_node', 'content_node', ?, ?)`,
     [req.user.id, String(req.params.id), JSON.stringify({ directItems: Number(n) })],
   );
@@ -287,11 +287,11 @@ router.post('/items', adminOnly, upload.single('file'), asyncHandler(async (req,
     throw Object.assign(new Error('Provide a file or a url'), { status: 400, code: 'NO_CONTENT_SOURCE' });
   }
 
-  const node = await one('SELECT id FROM content_node WHERE id = ?', [body.nodeId]);
+  const node = await one('SELECT id FROM ls_content_node WHERE id = ?', [body.nodeId]);
   if (!node) throw Object.assign(new Error('Folder not found'), { status: 404 });
 
   const result = await execute(
-    `INSERT INTO content_item
+    `INSERT INTO ls_content_item
        (node_id, item_type, title, description, url, storage_path, mime_type, size_bytes, duration_secs, sort_order, visibility, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [body.nodeId, body.itemType, body.title, body.description ?? null,
@@ -300,7 +300,7 @@ router.post('/items', adminOnly, upload.single('file'), asyncHandler(async (req,
      body.sortOrder, body.visibility, req.user.id],
   );
 
-  res.status(201).json({ item: shapeItem(await one('SELECT * FROM content_item WHERE id = ?', [result.insertId])) });
+  res.status(201).json({ item: shapeItem(await one('SELECT * FROM ls_content_item WHERE id = ?', [result.insertId])) });
 }));
 
 router.put('/items/:id', adminOnly, upload.single('file'), asyncHandler(async (req, res) => {
@@ -313,7 +313,7 @@ router.put('/items/:id', adminOnly, upload.single('file'), asyncHandler(async (r
     visibility: z.enum(['visible', 'hidden']).optional(),
   }).parse(req.body);
 
-  const existing = await one('SELECT * FROM content_item WHERE id = ?', [req.params.id]);
+  const existing = await one('SELECT * FROM ls_content_item WHERE id = ?', [req.params.id]);
   if (!existing) throw Object.assign(new Error('Content not found'), { status: 404 });
 
   const map = { title: 'title', description: 'description', url: 'url', nodeId: 'node_id', sortOrder: 'sort_order', visibility: 'visibility' };
@@ -333,23 +333,23 @@ router.put('/items/:id', adminOnly, upload.single('file'), asyncHandler(async (r
     if (existing.storage_path) {
       const old = path.join(config.storage.uploadDir, existing.storage_path);
       params.push(req.params.id);
-      await execute(`UPDATE content_item SET ${sets.join(', ')} WHERE id = ?`, params);
+      await execute(`UPDATE ls_content_item SET ${sets.join(', ')} WHERE id = ?`, params);
       fs.promises.unlink(old).catch(() => { /* already gone — nothing to do */ });
-      return res.json({ item: shapeItem(await one('SELECT * FROM content_item WHERE id = ?', [req.params.id])) });
+      return res.json({ item: shapeItem(await one('SELECT * FROM ls_content_item WHERE id = ?', [req.params.id])) });
     }
   }
 
   if (!sets.length) throw Object.assign(new Error('Nothing to update'), { status: 400 });
   params.push(req.params.id);
-  await execute(`UPDATE content_item SET ${sets.join(', ')} WHERE id = ?`, params);
-  res.json({ item: shapeItem(await one('SELECT * FROM content_item WHERE id = ?', [req.params.id])) });
+  await execute(`UPDATE ls_content_item SET ${sets.join(', ')} WHERE id = ?`, params);
+  res.json({ item: shapeItem(await one('SELECT * FROM ls_content_item WHERE id = ?', [req.params.id])) });
 }));
 
 router.delete('/items/:id', adminOnly, asyncHandler(async (req, res) => {
-  const item = await one('SELECT storage_path FROM content_item WHERE id = ?', [req.params.id]);
+  const item = await one('SELECT storage_path FROM ls_content_item WHERE id = ?', [req.params.id]);
   if (!item) throw Object.assign(new Error('Content not found'), { status: 404 });
 
-  await execute('DELETE FROM content_item WHERE id = ?', [req.params.id]);
+  await execute('DELETE FROM ls_content_item WHERE id = ?', [req.params.id]);
   if (item.storage_path) {
     fs.promises.unlink(path.join(config.storage.uploadDir, item.storage_path)).catch(() => {});
   }
@@ -365,7 +365,7 @@ async function isDescendant(candidateParentId, nodeId) {
   // already-corrupt parent chain from spinning forever.
   for (let depth = 0; depth < 20 && cursor; depth += 1) {
     if (Number(cursor) === Number(nodeId)) return true;
-    const row = await one('SELECT parent_id FROM content_node WHERE id = ?', [cursor]);
+    const row = await one('SELECT parent_id FROM ls_content_node WHERE id = ?', [cursor]);
     cursor = row?.parent_id;
   }
   return false;

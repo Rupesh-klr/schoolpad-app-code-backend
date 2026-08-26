@@ -32,7 +32,7 @@ router.post('/otp/request', asyncHandler(async (req, res) => {
   // password-protected account into one reachable by anyone holding the inbox.
   const id = classifyIdentifier(identifier);
   const existing = await one(
-    `SELECT role FROM app_user WHERE ${id.type === 'email' ? 'email' : 'phone'} = ?`,
+    `SELECT role FROM ls_user WHERE ${id.type === 'email' ? 'email' : 'phone'} = ?`,
     [id.value],
   );
   if (existing?.role === ROLES.ADMIN) {
@@ -67,7 +67,7 @@ router.post('/otp/verify', asyncHandler(async (req, res) => {
   const column = id.type === 'email' ? 'email' : 'phone';
 
   const user = await one(
-    `SELECT id, role, status, full_name, email, phone FROM app_user WHERE ${column} = ?`,
+    `SELECT id, role, status, full_name, email, phone FROM ls_user WHERE ${column} = ?`,
     [id.value],
   );
 
@@ -84,7 +84,7 @@ router.post('/otp/verify', asyncHandler(async (req, res) => {
     throw Object.assign(new Error('This account has been deactivated'), { status: 403, code: 'ACCOUNT_INACTIVE' });
   }
 
-  await execute('UPDATE app_user SET last_login_at = NOW() WHERE id = ?', [user.id]);
+  await execute('UPDATE ls_user SET last_login_at = NOW() WHERE id = ?', [user.id]);
 
   return res.json({
     registered: true,
@@ -128,7 +128,7 @@ router.post('/register', asyncHandler(async (req, res) => {
 
   const user = await transaction(async (conn) => {
     const [ins] = await conn.execute(
-      `INSERT INTO app_user (role, email, phone, full_name, status)
+      `INSERT INTO ls_user (role, email, phone, full_name, status)
        VALUES (?, ?, ?, ?, ?)`,
       [
         body.role,
@@ -143,7 +143,7 @@ router.post('/register', asyncHandler(async (req, res) => {
 
     if (body.role === ROLES.STUDENT) {
       await conn.execute(
-        `INSERT INTO student_profile (user_id, school_id, class_level, section)
+        `INSERT INTO ls_student_profile (user_id, school_id, class_level, section)
          VALUES (?, ?, ?, ?)`,
         [ins.insertId, body.schoolId ?? null, body.classLevel ?? null, body.section ?? null],
       );
@@ -204,7 +204,7 @@ router.post('/admin/login', asyncHandler(async (req, res) => {
 
   const user = await one(
     `SELECT id, role, status, password_hash, full_name, email
-       FROM app_user WHERE email = ?`,
+       FROM ls_user WHERE email = ?`,
     [email.toLowerCase()],
   );
 
@@ -218,7 +218,7 @@ router.post('/admin/login', asyncHandler(async (req, res) => {
     throw Object.assign(new Error('This admin account is not active'), { status: 403, code: 'ACCOUNT_INACTIVE' });
   }
 
-  await execute('UPDATE app_user SET last_login_at = NOW() WHERE id = ?', [user.id]);
+  await execute('UPDATE ls_user SET last_login_at = NOW() WHERE id = ?', [user.id]);
 
   res.json(await sessionFor(user, req));
 }));
@@ -233,14 +233,14 @@ router.post('/admin/change-password', authenticate, asyncHandler(async (req, res
     throw Object.assign(new Error('Only admin accounts have a password'), { status: 403 });
   }
 
-  const row = await one('SELECT password_hash FROM app_user WHERE id = ?', [req.user.id]);
+  const row = await one('SELECT password_hash FROM ls_user WHERE id = ?', [req.user.id]);
   if (!await verifyPassword(currentPassword, row.password_hash)) {
     throw Object.assign(new Error('Current password is incorrect'), { status: 401, code: 'BAD_CREDENTIALS' });
   }
 
-  await execute('UPDATE app_user SET password_hash = ? WHERE id = ?', [await hashPassword(newPassword), req.user.id]);
+  await execute('UPDATE ls_user SET password_hash = ? WHERE id = ?', [await hashPassword(newPassword), req.user.id]);
   await execute(
-    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id) VALUES (?, 'admin.password_change', 'app_user', ?)`,
+    `INSERT INTO ls_audit_log (actor_id, action, entity_type, entity_id) VALUES (?, 'admin.password_change', 'app_user', ?)`,
     [req.user.id, String(req.user.id)],
   );
 
@@ -292,10 +292,10 @@ async function publicUser(userId) {
             sp.school_id, sp.class_level, sp.section,
             s.name AS school_name,
             ac.code AS access_code
-       FROM app_user u
-       LEFT JOIN student_profile sp ON sp.user_id = u.id
-       LEFT JOIN school s           ON s.id = sp.school_id
-       LEFT JOIN access_code ac     ON ac.id = sp.access_code_id
+       FROM ls_user u
+       LEFT JOIN ls_student_profile sp ON sp.user_id = u.id
+       LEFT JOIN ls_school s           ON s.id = sp.school_id
+       LEFT JOIN ls_access_code ac     ON ac.id = sp.access_code_id
       WHERE u.id = ?`,
     [userId],
   );
@@ -315,7 +315,7 @@ async function publicUser(userId) {
       schoolName: row.school_name,
       classLevel: row.class_level,
       section: row.section,
-      accessCode: row.access_code,
+      accessCode: row.ls_access_code,
     } : {}),
   };
 }

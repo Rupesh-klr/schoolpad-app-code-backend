@@ -57,7 +57,7 @@ export async function generateBatch({ count, schoolId = null, classLevel = null,
       const code = generateCode();
       try {
         const res = await execute(
-          `INSERT INTO access_code (code, school_id, class_level, batch_id, created_by)
+          `INSERT INTO ls_access_code (code, school_id, class_level, batch_id, created_by)
            VALUES (?, ?, ?, ?, ?)`,
           [code, schoolId, classLevel, batchId, createdBy],
         );
@@ -103,7 +103,7 @@ export async function redeemCode({ code, studentUserId }) {
 
   return transaction(async (conn) => {
     const [rows] = await conn.execute(
-      'SELECT id, status, school_id, class_level FROM access_code WHERE code = ? FOR UPDATE',
+      'SELECT id, status, school_id, class_level FROM ls_access_code WHERE code = ? FOR UPDATE',
       [normalised],
     );
     const row = rows[0];
@@ -121,12 +121,12 @@ export async function redeemCode({ code, studentUserId }) {
     }
 
     await conn.execute(
-      `UPDATE access_code SET status = ?, used_by = ?, used_at = NOW() WHERE id = ?`,
+      `UPDATE ls_access_code SET status = ?, used_by = ?, used_at = NOW() WHERE id = ?`,
       [CODE_STATUS.USED, studentUserId, row.id],
     );
 
     await conn.execute(
-      `UPDATE app_user SET status = ?, activated_at = NOW() WHERE id = ?`,
+      `UPDATE ls_user SET status = ?, activated_at = NOW() WHERE id = ?`,
       [USER_STATUS.ACTIVE, studentUserId],
     );
 
@@ -139,10 +139,10 @@ export async function redeemCode({ code, studentUserId }) {
     if (row.class_level) { sets.push('class_level = ?'); params.push(row.class_level); }
     params.push(studentUserId);
 
-    await conn.execute(`UPDATE student_profile SET ${sets.join(', ')} WHERE user_id = ?`, params);
+    await conn.execute(`UPDATE ls_student_profile SET ${sets.join(', ')} WHERE user_id = ?`, params);
 
     await conn.execute(
-      `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, detail)
+      `INSERT INTO ls_audit_log (actor_id, action, entity_type, entity_id, detail)
        VALUES (?, 'code.redeem', 'access_code', ?, ?)`,
       [studentUserId, String(row.id), JSON.stringify({ schoolId: row.school_id, classLevel: row.class_level })],
     );
@@ -154,7 +154,7 @@ export async function redeemCode({ code, studentUserId }) {
 /** Dashboard tiles: total / used / unused / inactive. */
 export async function codeStats() {
   const rows = await query(
-    `SELECT status, COUNT(*) AS n FROM access_code GROUP BY status`,
+    `SELECT status, COUNT(*) AS n FROM ls_access_code GROUP BY status`,
   );
   const by = Object.fromEntries(rows.map((r) => [r.status, Number(r.n)]));
   const used = by.used || 0;
@@ -168,7 +168,7 @@ export async function codeStats() {
  * A used code is immutable — it is now a receipt of who activated with it.
  */
 export async function reassignCode({ codeId, schoolId = null, classLevel = null, actorId = null }) {
-  const row = await one('SELECT id, status FROM access_code WHERE id = ?', [codeId]);
+  const row = await one('SELECT id, status FROM ls_access_code WHERE id = ?', [codeId]);
   if (!row) throw Object.assign(new Error('Code not found'), { status: 404 });
   if (row.status === CODE_STATUS.USED) {
     throw Object.assign(
@@ -177,9 +177,9 @@ export async function reassignCode({ codeId, schoolId = null, classLevel = null,
     );
   }
 
-  await execute('UPDATE access_code SET school_id = ?, class_level = ? WHERE id = ?', [schoolId, classLevel, codeId]);
+  await execute('UPDATE ls_access_code SET school_id = ?, class_level = ? WHERE id = ?', [schoolId, classLevel, codeId]);
   await execute(
-    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, detail)
+    `INSERT INTO ls_audit_log (actor_id, action, entity_type, entity_id, detail)
      VALUES (?, 'code.reassign', 'access_code', ?, ?)`,
     [actorId, String(codeId), JSON.stringify({ schoolId, classLevel })],
   );
