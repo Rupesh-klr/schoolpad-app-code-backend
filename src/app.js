@@ -11,8 +11,10 @@ import schoolRoutes from './routes/schools.routes.js';
 import studentRoutes from './routes/students.routes.js';
 import codeRoutes from './routes/codes.routes.js';
 import contentRoutes from './routes/content.routes.js';
+import documentRoutes from './routes/documents.routes.js';
 import parentRoutes from './routes/parent.routes.js';
 import miscRoutes from './routes/misc.routes.js';
+import { uploadErrorHandler } from './services/upload.js';
 
 export function createApp() {
   const app = express();
@@ -59,12 +61,16 @@ export function createApp() {
   app.use('/api/students', studentRoutes);
   app.use('/api/codes', codeRoutes);
   app.use('/api/content', contentRoutes);
+  app.use('/api/documents', documentRoutes);
   app.use('/api/parent', parentRoutes);
   // Mounted last: it owns bare paths like /api/health, so a more specific
   // prefix above must get the chance to match first.
   app.use('/api', miscRoutes);
 
   app.use(notFound);
+  // Before the general handler: multer's errors are unreadable raw, and the
+  // size-limit one needs to reach the user as a sentence they can act on.
+  app.use(uploadErrorHandler);
   app.use(errorHandler);
 
   return app;

@@ -95,6 +95,20 @@ export async function requestOtp(identifier) {
     channel: id.channel,
     expiresInSeconds: OTP.TTL_SECONDS,
     length: OTP.LENGTH,
+
+    /**
+     * The code itself, but only when it is already being printed to the console.
+     *
+     * `OTP_PROVIDER=console` means the code is going to the server log in
+     * plaintext anyway, so returning it here reveals nothing new — and it saves
+     * hunting through a terminal on every sign-in during development, and lets
+     * automated tests run without scraping logs.
+     *
+     * config/index.js refuses to boot with provider=console under
+     * NODE_ENV=production, so this field can never appear on a real server.
+     * The double guard is deliberate: one of them failing should not be enough.
+     */
+    ...(config.otp.provider === 'console' && !config.isProd ? { devCode: code } : {}),
   };
 }
 

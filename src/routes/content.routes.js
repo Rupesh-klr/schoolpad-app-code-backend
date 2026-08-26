@@ -1,13 +1,9 @@
 import { Router } from 'express';
-import path from 'node:path';
-import fs from 'node:fs';
-import crypto from 'node:crypto';
-import multer from 'multer';
 import { z } from 'zod';
-import { config } from '../config/index.js';
 import { execute, one, query } from '../config/db.js';
 import { ITEM_TYPES, NODE_TYPES, ROLES } from '../config/constants.js';
 import { authenticate, requireAdmin, requireActive } from '../middleware/auth.js';
+import { upload, mediaUrl, removeStoredFile } from '../services/upload.js';
 import { asyncHandler } from '../middleware/error.js';
 
 const router = Router();
@@ -18,22 +14,10 @@ const router = Router();
  * Admin routes mutate; student routes read and are filtered by class and
  * visibility. Both live here because they read the same two tables and keeping
  * the visibility rule in one file is what stops the two views drifting apart.
+ *
+ * Uploads go through services/upload.js, shared with documents — one filename
+ * policy and one size limit rather than two copies that drift.
  */
-
-fs.mkdirSync(config.storage.uploadDir, { recursive: true });
-
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, config.storage.uploadDir),
-    filename: (req, file, cb) => {
-      // Never trust the client's filename on disk. A student-supplied
-      // "../../etc/cron.d/x" would otherwise be written wherever it points.
-      const ext = path.extname(file.originalname).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 10);
-      cb(null, `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`);
-    },
-  }),
-  limits: { fileSize: config.storage.maxUploadBytes },
-});
 
 // ─── Student-facing ──────────────────────────────────────────────────────────
 
@@ -295,7 +279,7 @@ router.post('/items', adminOnly, upload.single('file'), asyncHandler(async (req,
        (node_id, item_type, title, description, url, storage_path, mime_type, size_bytes, duration_secs, sort_order, visibility, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [body.nodeId, body.itemType, body.title, body.description ?? null,
-     body.url ?? null, req.file ? path.basename(req.file.path) : null,
+     body.url ?? null, req.file ? req.file.filename : null,
      req.file?.mimetype ?? null, req.file?.size ?? null, body.durationSecs ?? null,
      body.sortOrder, body.visibility, req.user.id],
   );
@@ -326,15 +310,17 @@ router.put('/items/:id', adminOnly, upload.single('file'), asyncHandler(async (r
   // "Replace content" from the spec: a new file supersedes the old one.
   if (req.file) {
     sets.push('storage_path = ?', 'mime_type = ?', 'size_bytes = ?');
-    params.push(path.basename(req.file.path), req.file.mimetype, req.file.size);
+    params.push(req.file.filename, req.file.mimetype, req.file.size);
 
     // Delete the superseded file only after the row is updated, so a failed
     // update never leaves a database row pointing at a file that is gone.
     if (existing.storage_path) {
-      const old = path.join(config.storage.uploadDir, existing.storage_path);
+      const old = existing.storage_path;
       params.push(req.params.id);
       await execute(`UPDATE ls_content_item SET ${sets.join(', ')} WHERE id = ?`, params);
-      fs.promises.unlink(old).catch(() => { /* already gone — nothing to do */ });
+      // After the row is updated, so a failed update never leaves the row
+      // pointing at a file that is gone.
+      await removeStoredFile(old);
       return res.json({ item: shapeItem(await one('SELECT * FROM ls_content_item WHERE id = ?', [req.params.id])) });
     }
   }
@@ -351,7 +337,7 @@ router.delete('/items/:id', adminOnly, asyncHandler(async (req, res) => {
 
   await execute('DELETE FROM ls_content_item WHERE id = ?', [req.params.id]);
   if (item.storage_path) {
-    fs.promises.unlink(path.join(config.storage.uploadDir, item.storage_path)).catch(() => {});
+    await removeStoredFile(item.storage_path);
   }
   res.json({ deleted: true });
 }));
@@ -379,7 +365,7 @@ function shapeItem(r) {
     title: r.title,
     description: r.description,
     // Uploaded files are exposed through /media, never as a filesystem path.
-    url: r.storage_path ? `/media/${r.storage_path}` : r.url,
+    url: r.storage_path ? mediaUrl(r.storage_path) : r.url,
     mimeType: r.mime_type,
     durationSecs: r.duration_secs,
     visibility: r.visibility,
