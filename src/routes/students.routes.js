@@ -16,41 +16,80 @@ router.use(authenticate, requireAdmin);
  * class, open one, activate or deactivate, and see the code they used.
  */
 
+const JOINS = `
+       FROM ls_user u
+       LEFT JOIN ls_student_profile sp ON sp.user_id = u.id
+       LEFT JOIN ls_school s           ON s.id = sp.school_id
+       LEFT JOIN ls_access_code ac     ON ac.id = sp.access_code_id`;
+
+/**
+ * List students, with the facets the admin screen needs to build its filters.
+ *
+ * `search` covers the student and the school by name, so typing "Greenwood"
+ * finds that school's students without first selecting it from the dropdown —
+ * an admin who knows the school name should not have to know it is a filter.
+ *
+ * The response also carries `classes`: which class levels exist under the
+ * current school/search/status filters, with a count each. That is what lets
+ * the UI show real class options for the selected school instead of a
+ * hardcoded 2–10, and it supplies the counts on each collapsible header.
+ */
 router.get('/', asyncHandler(async (req, res) => {
   const { search = '', schoolId, classLevel, status, limit, offset } = req.query;
   const lim = Math.min(Number(limit) || PAGINATION.DEFAULT_LIMIT, PAGINATION.MAX_LIMIT);
   const off = Number(offset) || 0;
 
-  const where = ['u.role = ?'];
-  const params = [ROLES.STUDENT];
+  // Built in two halves. The class facet reuses `base` but deliberately omits
+  // the class filter — including it would leave the picker showing only the
+  // class already chosen, with no way back to the others.
+  const base = ['u.role = ?'];
+  const baseParams = [ROLES.STUDENT];
 
   if (search) {
-    where.push('(u.full_name LIKE ? OR u.email LIKE ? OR u.phone LIKE ? OR ac.code LIKE ?)');
-    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+    base.push('(u.full_name LIKE ? OR u.email LIKE ? OR u.phone LIKE ? OR ac.code LIKE ? OR s.name LIKE ?)');
+    const like = `%${search}%`;
+    baseParams.push(like, like, like, like, like);
   }
-  if (schoolId)    { where.push('sp.school_id = ?');   params.push(schoolId); }
-  if (classLevel)  { where.push('sp.class_level = ?'); params.push(classLevel); }
-  if (status)      { where.push('u.status = ?');       params.push(status); }
+  if (schoolId) { base.push('sp.school_id = ?'); baseParams.push(schoolId); }
+  if (status)   { base.push('u.status = ?');     baseParams.push(status); }
 
-  const from = `
-       FROM ls_user u
-       LEFT JOIN ls_student_profile sp ON sp.user_id = u.id
-       LEFT JOIN ls_school s           ON s.id = sp.school_id
-       LEFT JOIN ls_access_code ac     ON ac.id = sp.access_code_id
-      WHERE ${where.join(' AND ')}`;
+  const where = [...base];
+  const params = [...baseParams];
+  if (classLevel) { where.push('sp.class_level = ?'); params.push(classLevel); }
+
+  const filtered = `${JOINS} WHERE ${where.join(' AND ')}`;
 
   const rows = await query(
     `SELECT u.id, u.full_name, u.email, u.phone, u.status, u.created_at, u.last_login_at,
             sp.class_level, sp.section, sp.school_id, s.name AS school_name, ac.code AS access_code
-       ${from}
-      ORDER BY u.created_at DESC
+       ${filtered}
+      -- Class first so the grouped view arrives already ordered, and students
+      -- with no class yet sort to the end rather than leading the list.
+      ORDER BY sp.class_level IS NULL, sp.class_level, u.full_name
       LIMIT ${lim} OFFSET ${off}`,
     params,
   );
 
-  const [{ total }] = await query(`SELECT COUNT(*) AS total ${from}`, params);
+  const [{ total }] = await query(`SELECT COUNT(*) AS total ${filtered}`, params);
 
-  res.json({ students: rows.map(shape), total: Number(total), limit: lim, offset: off });
+  const classRows = await query(
+    `SELECT sp.class_level, COUNT(*) AS n
+       ${JOINS} WHERE ${base.join(' AND ')}
+      GROUP BY sp.class_level
+      ORDER BY sp.class_level IS NULL, sp.class_level`,
+    baseParams,
+  );
+
+  res.json({
+    students: rows.map(shape),
+    total: Number(total),
+    limit: lim,
+    offset: off,
+    classes: classRows.map((r) => ({
+      classLevel: r.class_level,
+      count: Number(r.n),
+    })),
+  });
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
