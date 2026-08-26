@@ -1,0 +1,7 @@
+# Shell scripts must keep LF endings — a CRLF shebang makes Linux report
+# "bad interpreter" with no useful detail.
+*.sh text eol=lf
+*.service text eol=lf
+
+# SQL is read by the mysql client on Linux.
+*.sql text eol=lf

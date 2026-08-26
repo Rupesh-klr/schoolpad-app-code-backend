@@ -1,0 +1,37 @@
+# Secrets — never commit. Use .env.example as the template.
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# Uploaded content. Files students consume live here in dev; in production this
+# is S3. Committing them would put copyrighted material in git history forever.
+uploads/
+!uploads/.gitkeep
+
+# Runtime
+*.log
+logs/
+pids/
+*.pid
+coverage/
+.nyc_output/
+
+# Editors / OS
+.vscode/
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build output
+dist/
+build/
+tmp/
