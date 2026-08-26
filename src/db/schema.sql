@@ -257,3 +257,75 @@ CREATE TABLE IF NOT EXISTS ls_audit_log (
   KEY idx_ls_audit_actor (actor_id, created_at),
   KEY idx_ls_audit_entity (entity_type, entity_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Documents & notices
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- An uploaded file *or* a link, targeted at everyone / one school / one class.
+--
+-- Deliberately separate from content_item. Content is curriculum: it hangs off
+-- the Class-Subject-Chapter-Topic tree and a student reaches it by browsing.
+-- A notice is pushed at people and has an audience, a category and a read
+-- state. Forcing both into one table would mean every content row carrying
+-- three columns it never uses, and every notice pretending to have a parent
+-- topic it does not belong to.
+CREATE TABLE IF NOT EXISTS ls_document (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  title         VARCHAR(191) NOT NULL,
+  description   TEXT         NULL,
+
+  -- What kind of notice. Drives the icon and lets students filter.
+  category      ENUM('gk','notice','important','homework','general')
+                NOT NULL DEFAULT 'general',
+
+  -- Exactly one of url / storage_path is set; enforced in the service layer,
+  -- because MySQL CHECK constraints are silently ignored before 8.0.16 and a
+  -- rule that only sometimes applies is worse than one held in one place.
+  source_type   ENUM('file','link') NOT NULL,
+  url           TEXT         NULL,
+  storage_path  VARCHAR(500) NULL,
+  mime_type     VARCHAR(100) NULL,
+  size_bytes    BIGINT UNSIGNED NULL,
+
+  -- Audience. `global` ignores school_id and class_level; `school` uses
+  -- school_id; `class` uses both. Kept as three explicit columns rather than a
+  -- join table because a notice has exactly one audience and the feed query
+  -- has to stay a single indexed read.
+  scope         ENUM('global','school','class') NOT NULL DEFAULT 'global',
+  school_id     BIGINT UNSIGNED NULL,
+  class_level   TINYINT UNSIGNED NULL,
+
+  status        ENUM('draft','published','archived') NOT NULL DEFAULT 'published',
+  -- Whether this should surface as an unread notification, as opposed to
+  -- quietly appearing in the list. A reference PDF does not need to buzz.
+  notify        TINYINT(1) NOT NULL DEFAULT 1,
+  published_at  DATETIME NULL,
+
+  created_by    BIGINT UNSIGNED NULL,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  -- The feed filters on all three together, so one composite index serves it.
+  KEY idx_ls_doc_audience (status, scope, school_id, class_level),
+  KEY idx_ls_doc_published (published_at),
+  KEY idx_ls_doc_category (category),
+  CONSTRAINT fk_ls_doc_school FOREIGN KEY (school_id) REFERENCES ls_school (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Read receipts.
+--
+-- Unread is the absence of a row, not a flag on a per-user copy. Fanning a
+-- notice out to every student at insert time would write thousands of rows for
+-- one announcement and have to be undone if the audience is edited.
+CREATE TABLE IF NOT EXISTS ls_document_read (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  document_id BIGINT UNSIGNED NOT NULL,
+  user_id     BIGINT UNSIGNED NOT NULL,
+  read_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_ls_doc_read (document_id, user_id),
+  KEY idx_ls_doc_read_user (user_id),
+  CONSTRAINT fk_ls_docread_doc  FOREIGN KEY (document_id) REFERENCES ls_document (id) ON DELETE CASCADE,
+  CONSTRAINT fk_ls_docread_user FOREIGN KEY (user_id)     REFERENCES ls_user (id)     ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
