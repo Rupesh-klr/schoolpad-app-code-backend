@@ -89,6 +89,35 @@ export const CODE_STATUS = Object.freeze({
 export const NODE_TYPES = Object.freeze(['class', 'subject', 'chapter', 'topic']);
 export const ITEM_TYPES = Object.freeze(['video', 'pdf', 'image', 'link']);
 
+export const UPLOAD = {
+  /** Files accepted in one request. */
+  MAX_FILES: 10,
+
+  /**
+   * Per-kind size ceilings, in MB.
+   *
+   * One flat limit would have to be the largest of these, which means a 120MB
+   * "profile photo" sails through. Each kind is capped at what it plausibly
+   * needs, and the check runs after the upload because multer cannot know the
+   * kind until it has the mimetype.
+   */
+  MAX_MB: { video: 120, pdf: 25, image: 10, other: 25 },
+
+  /**
+   * Extensions accepted per kind. An allowlist, not a blocklist: a blocklist is
+   * one unfamiliar extension away from serving something executable.
+   */
+  ALLOWED: {
+    video: ['.mp4', '.mov', '.m4v', '.webm'],
+    pdf: ['.pdf'],
+    image: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic'],
+    other: ['.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.txt', '.csv'],
+  },
+};
+
+/** Bytes ceiling for multer — the largest kind, refined per file afterwards. */
+export const MAX_UPLOAD_BYTES = Math.max(...Object.values(UPLOAD.MAX_MB)) * 1024 * 1024;
+
 export const PAGINATION = {
   DEFAULT_LIMIT: 25,
   MAX_LIMIT: 200,

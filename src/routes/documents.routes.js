@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { execute, one, query } from '../config/db.js';
 import { PAGINATION, ROLES, STUDENT } from '../config/constants.js';
 import { authenticate, requireAdmin, requireActive } from '../middleware/auth.js';
-import { upload, mediaUrl, removeStoredFile } from '../services/upload.js';
+import { upload, mediaUrl, removeStoredFile, relativePath } from '../services/upload.js';
 import { asyncHandler } from '../middleware/error.js';
 
 const router = Router();
@@ -218,7 +218,7 @@ router.post('/', adminOnly, upload.single('file'), asyncHandler(async (req, res)
     );
   }
   if (req.file && hasUrl) {
-    await removeStoredFile(req.file.filename);
+    await removeStoredFile(relativePath(req.file));
     throw Object.assign(
       new Error('Provide a file or a link, not both'),
       { status: 400, code: 'AMBIGUOUS_SOURCE' },
@@ -236,7 +236,7 @@ router.post('/', adminOnly, upload.single('file'), asyncHandler(async (req, res)
       body.title, body.description || null, body.category,
       req.file ? 'file' : 'link',
       hasUrl ? body.url : null,
-      req.file ? req.file.filename : null,
+      req.file ? relativePath(req.file) : null,
       req.file?.mimetype || null, req.file?.size || null,
       body.scope, schoolId, classLevel,
       body.status, body.notify ? 1 : 0,

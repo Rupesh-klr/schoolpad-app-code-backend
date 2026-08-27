@@ -132,6 +132,8 @@ CREATE TABLE IF NOT EXISTS ls_access_code (
 CREATE TABLE IF NOT EXISTS ls_content_node (
   id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   parent_id    BIGINT UNSIGNED NULL,
+  -- NULL means shared by every school. Set, and only that school sees it.
+  school_id    BIGINT UNSIGNED NULL,
   node_type    ENUM('class','subject','chapter','topic') NOT NULL,
   title        VARCHAR(191)    NOT NULL,
   description  TEXT            NULL,
@@ -146,6 +148,7 @@ CREATE TABLE IF NOT EXISTS ls_content_node (
   PRIMARY KEY (id),
   KEY idx_ls_node_parent (parent_id),
   KEY idx_ls_node_class (class_level, node_type),
+  KEY idx_ls_node_school (school_id, class_level),
   KEY idx_ls_node_visibility (visibility),
   CONSTRAINT fk_ls_node_parent FOREIGN KEY (parent_id) REFERENCES ls_content_node (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

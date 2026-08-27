@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { execute, one, query } from '../config/db.js';
-import { ITEM_TYPES, NODE_TYPES, ROLES } from '../config/constants.js';
+import { ITEM_TYPES, NODE_TYPES, ROLES, UPLOAD } from '../config/constants.js';
 import { authenticate, requireAdmin, requireActive } from '../middleware/auth.js';
-import { upload, mediaUrl, removeStoredFile } from '../services/upload.js';
+import { upload, mediaUrl, removeStoredFile, relativePath, enforceLimits } from '../services/upload.js';
 import { asyncHandler } from '../middleware/error.js';
 
 const router = Router();
@@ -279,12 +279,79 @@ router.post('/items', adminOnly, upload.single('file'), asyncHandler(async (req,
        (node_id, item_type, title, description, url, storage_path, mime_type, size_bytes, duration_secs, sort_order, visibility, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [body.nodeId, body.itemType, body.title, body.description ?? null,
-     body.url ?? null, req.file ? req.file.filename : null,
+     body.url ?? null, req.file ? relativePath(req.file) : null,
      req.file?.mimetype ?? null, req.file?.size ?? null, body.durationSecs ?? null,
      body.sortOrder, body.visibility, req.user.id],
   );
 
   res.status(201).json({ item: shapeItem(await one('SELECT * FROM ls_content_item WHERE id = ?', [result.insertId])) });
+}));
+
+/**
+ * Upload several files into one folder at once.
+ *
+ *   POST /api/content/items/bulk
+ *   multipart: files[] (up to UPLOAD.MAX_FILES), nodeId, schoolId?
+ *
+ * Partial success is the point. Ten files where one is an oversized video
+ * should store nine and report the one, not discard the batch — re-picking ten
+ * files because of one mistake is the kind of thing people stop using a tool
+ * over.
+ */
+router.post('/items/bulk', adminOnly, upload.array('files', UPLOAD.MAX_FILES), asyncHandler(async (req, res) => {
+  const body = z.object({
+    nodeId: z.coerce.number().int().positive(),
+    // Only used to pick the storage sub-directory; multer has already read it
+    // off the request by the time this runs.
+    schoolId: z.coerce.number().int().positive().optional().nullable(),
+    visibility: z.enum(['visible', 'hidden']).default('visible'),
+  }).parse(req.body);
+
+  if (!req.files?.length) {
+    throw Object.assign(new Error('No files were uploaded'), { status: 400, code: 'NO_FILES' });
+  }
+
+  const node = await one('SELECT id FROM ls_content_node WHERE id = ?', [body.nodeId]);
+  if (!node) {
+    // The files are already on disk at this point, so clean up before failing.
+    for (const f of req.files) await removeStoredFile(relativePath(f));
+    throw Object.assign(new Error('Folder not found'), { status: 404 });
+  }
+
+  const { accepted, rejected } = await enforceLimits(req.files);
+
+  const created = [];
+  for (const [i, file] of accepted.entries()) {
+    // kindOf returns video/pdf/image/other; the column only knows the first
+    // three plus link, so anything else is filed as a pdf-style document.
+    const itemType = ITEM_TYPES.includes(file.kind) ? file.kind : 'pdf';
+    const title = file.originalname.replace(/\.[^.]+$/, '').slice(0, 191) || 'Untitled';
+
+    const r = await execute(
+      `INSERT INTO ls_content_item
+         (node_id, item_type, title, storage_path, mime_type, size_bytes, sort_order, visibility, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [body.nodeId, itemType, title, file.storagePath, file.mimetype, file.size,
+       i, body.visibility, req.user.id],
+    );
+    created.push(shapeItem(await one('SELECT * FROM ls_content_item WHERE id = ?', [r.insertId])));
+  }
+
+  await execute(
+    `INSERT INTO ls_audit_log (actor_id, action, entity_type, entity_id, detail)
+     VALUES (?, 'content.bulk_upload', 'ls_content_node', ?, ?)`,
+    [req.user.id, String(body.nodeId),
+     JSON.stringify({ uploaded: created.length, rejected: rejected.length, schoolId: body.schoolId ?? null })],
+  );
+
+  // 207 when some failed: the request neither fully succeeded nor failed, and
+  // a flat 201 would let the client show "10 uploaded" after two were dropped.
+  res.status(rejected.length ? 207 : 201).json({
+    uploaded: created.length,
+    items: created,
+    rejected,
+    limits: { maxFiles: UPLOAD.MAX_FILES, maxMb: UPLOAD.MAX_MB },
+  });
 }));
 
 router.put('/items/:id', adminOnly, upload.single('file'), asyncHandler(async (req, res) => {
@@ -310,7 +377,7 @@ router.put('/items/:id', adminOnly, upload.single('file'), asyncHandler(async (r
   // "Replace content" from the spec: a new file supersedes the old one.
   if (req.file) {
     sets.push('storage_path = ?', 'mime_type = ?', 'size_bytes = ?');
-    params.push(req.file.filename, req.file.mimetype, req.file.size);
+    params.push(relativePath(req.file), req.file.mimetype, req.file.size);
 
     // Delete the superseded file only after the row is updated, so a failed
     // update never leaves a database row pointing at a file that is gone.

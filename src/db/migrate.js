@@ -27,6 +27,50 @@ if (DROP && config.isProd) {
   process.exit(1);
 }
 
+/**
+ * Columns added after a table first shipped.
+ *
+ * schema.sql is CREATE TABLE IF NOT EXISTS, which does nothing to a table that
+ * already exists — so a new column never reaches an existing database. MySQL
+ * has no ADD COLUMN IF NOT EXISTS, so each one is checked against
+ * information_schema first, which keeps `npm run migrate` re-runnable.
+ */
+const COLUMN_ADDITIONS = [
+  {
+    table: 'ls_content_node',
+    column: 'school_id',
+    ddl: 'ADD COLUMN school_id BIGINT UNSIGNED NULL AFTER parent_id, '
+       + 'ADD KEY idx_ls_node_school (school_id, class_level)',
+    why: 'content can belong to one school; NULL means shared by all',
+  },
+];
+
+async function applyColumnAdditions(conn, database) {
+  let added = 0;
+  for (const c of COLUMN_ADDITIONS) {
+    const [[exists]] = await conn.query(
+      `SELECT COUNT(*) AS n FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+      [database, c.table, c.column],
+    );
+    if (Number(exists.n) > 0) continue;
+
+    // The table may not exist yet on a fresh database — schema.sql runs first,
+    // so by this point it does, but a mistyped name should not be fatal.
+    const [[table]] = await conn.query(
+      `SELECT COUNT(*) AS n FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+      [database, c.table],
+    );
+    if (Number(table.n) === 0) continue;
+
+    await conn.query(`ALTER TABLE \`${c.table}\` ${c.ddl}`);
+    console.log(`  ▸ ${c.table}.${c.column} added — ${c.why}`);
+    added += 1;
+  }
+  return added;
+}
+
 /** Every ls_ table, children before parents so foreign keys do not block. */
 async function dropOwnTables(conn, database) {
   const [rows] = await conn.query(
@@ -110,6 +154,8 @@ async function main() {
       throw err;
     }
   }
+
+  await applyColumnAdditions(conn, database);
 
   const [after] = await conn.query('SHOW TABLES');
   await conn.end();
