@@ -138,4 +138,8 @@ export const PUBLIC_CONSTANTS = {
   maxClass: STUDENT.MAX_CLASS,
   maxChildrenPerParent: PARENT.MAX_CHILDREN,
   maxGuardiansPerStudent: STUDENT.MAX_GUARDIANS,
+  // So the file picker can state the real limits instead of hardcoding numbers
+  // that drift the moment the server's change.
+  uploadMaxFiles: UPLOAD.MAX_FILES,
+  uploadMaxMb: UPLOAD.MAX_MB,
 };

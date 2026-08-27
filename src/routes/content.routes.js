@@ -91,7 +91,7 @@ router.get('/nodes/:id/children', authenticate, requireActive, asyncHandler(asyn
   }
 
   const children = await query(
-    `SELECT id, node_type, title, description, sort_order, visibility
+    `SELECT id, node_type, title, description, school_id, class_level, sort_order, visibility
        FROM ls_content_node WHERE parent_id = ? ${visible}
       ORDER BY sort_order, title`,
     [req.params.id],
@@ -109,11 +109,57 @@ router.get('/nodes/:id/children', authenticate, requireActive, asyncHandler(asyn
   );
 
   res.json({
-    node: { id: node.id, nodeType: node.node_type, title: node.title, description: node.description, classLevel: node.class_level },
+    node: {
+      id: node.id, nodeType: node.node_type, title: node.title,
+      description: node.description, classLevel: node.class_level, schoolId: node.school_id,
+    },
     children: children.map((c) => ({
-      id: c.id, nodeType: c.node_type, title: c.title, description: c.description, visibility: c.visibility,
+      id: c.id, nodeType: c.node_type, title: c.title, description: c.description,
+      schoolId: c.school_id, classLevel: c.class_level, visibility: c.visibility,
     })),
     items: items.map(shapeItem),
+  });
+}));
+
+/**
+ * One item, with its breadcrumb.
+ *
+ * The player screen needs the item and where it sits. Without this it would
+ * have to fetch the parent's children and search for the item by id, which is
+ * a round trip and a linear scan to answer "what am I looking at".
+ */
+router.get('/items/:id', authenticate, requireActive, asyncHandler(async (req, res) => {
+  const isAdmin = req.user.role === ROLES.ADMIN;
+
+  const item = await one(
+    `SELECT i.*, n.title AS node_title, n.id AS node_id, n.class_level, n.parent_id
+       FROM ls_content_item i
+       JOIN ls_content_node n ON n.id = i.node_id
+      WHERE i.id = ? ${isAdmin ? '' : "AND i.visibility = 'visible' AND n.visibility = 'visible'"}`,
+    [req.params.id],
+  );
+  if (!item) throw Object.assign(new Error('Content not found'), { status: 404 });
+
+  // A student may only open content in their own class.
+  if (!isAdmin) {
+    const profile = await one('SELECT class_level FROM ls_student_profile WHERE user_id = ?', [req.user.id]);
+    if (item.class_level && profile?.class_level !== item.class_level) {
+      throw Object.assign(new Error('This is not part of your class'), { status: 403, code: 'WRONG_CLASS' });
+    }
+  }
+
+  const progress = await one(
+    'SELECT status, position_secs FROM ls_content_progress WHERE user_id = ? AND item_id = ?',
+    [req.user.id, req.params.id],
+  );
+
+  res.json({
+    item: {
+      ...shapeItem(item),
+      progressStatus: progress?.status ?? null,
+      positionSecs: progress?.position_secs ?? 0,
+    },
+    node: { id: item.node_id, title: item.node_title, parentId: item.parent_id },
   });
 }));
 
@@ -148,7 +194,7 @@ const adminOnly = [authenticate, requireAdmin];
 /** Whole tree, including hidden nodes. */
 router.get('/tree', adminOnly, asyncHandler(async (req, res) => {
   const nodes = await query(
-    `SELECT id, parent_id, node_type, title, class_level, sort_order, visibility
+    `SELECT id, parent_id, school_id, node_type, title, class_level, sort_order, visibility
        FROM ls_content_node ORDER BY sort_order, title`,
   );
   const counts = await query(
@@ -161,7 +207,8 @@ router.get('/tree', adminOnly, asyncHandler(async (req, res) => {
   // map is easier to reason about than a CTE nobody will want to modify.
   const byId = new Map(nodes.map((n) => [n.id, {
     id: n.id, nodeType: n.node_type, title: n.title, classLevel: n.class_level,
-    visibility: n.visibility, itemCount: countBy[n.id] || 0, children: [],
+    schoolId: n.school_id, visibility: n.visibility,
+    itemCount: countBy[n.id] || 0, children: [],
   }]));
 
   const roots = [];
@@ -181,6 +228,7 @@ router.post('/nodes', adminOnly, asyncHandler(async (req, res) => {
     title: z.string().min(1).max(191),
     description: z.string().max(2000).optional().nullable(),
     classLevel: z.coerce.number().int().min(1).max(12).nullable().optional(),
+    schoolId: z.coerce.number().int().positive().nullable().optional(),
     sortOrder: z.coerce.number().int().default(0),
     visibility: z.enum(['visible', 'hidden']).default('visible'),
   }).parse(req.body);
@@ -188,16 +236,21 @@ router.post('/nodes', adminOnly, asyncHandler(async (req, res) => {
   // class_level is denormalised down the tree so a student query is one indexed
   // lookup. Inheriting it here is what keeps that denormalisation honest.
   let classLevel = body.classLevel ?? null;
+  let schoolId = body.schoolId ?? null;
   if (body.parentId) {
-    const parent = await one('SELECT class_level FROM ls_content_node WHERE id = ?', [body.parentId]);
+    const parent = await one('SELECT class_level, school_id FROM ls_content_node WHERE id = ?', [body.parentId]);
     if (!parent) throw Object.assign(new Error('Parent node not found'), { status: 404 });
     classLevel = classLevel ?? parent.class_level;
+    // Inherited, never overridden: a subject under a Greenwood class belongs to
+    // Greenwood, and letting a child disagree with its parent makes the
+    // school-scoped queries silently wrong.
+    schoolId = parent.school_id;
   }
 
   const result = await execute(
-    `INSERT INTO ls_content_node (parent_id, node_type, title, description, class_level, sort_order, visibility, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [body.parentId ?? null, body.nodeType, body.title, body.description ?? null,
+    `INSERT INTO ls_content_node (parent_id, school_id, node_type, title, description, class_level, sort_order, visibility, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [body.parentId ?? null, schoolId, body.nodeType, body.title, body.description ?? null,
      classLevel, body.sortOrder, body.visibility, req.user.id],
   );
 
