@@ -12,6 +12,9 @@ import studentRoutes from './routes/students.routes.js';
 import codeRoutes from './routes/codes.routes.js';
 import contentRoutes from './routes/content.routes.js';
 import documentRoutes from './routes/documents.routes.js';
+import classRoutes from './routes/classes.routes.js';
+import teacherRoutes from './routes/teachers.routes.js';
+import calendarRoutes from './routes/calendar.routes.js';
 import parentRoutes from './routes/parent.routes.js';
 import miscRoutes from './routes/misc.routes.js';
 import { uploadErrorHandler } from './services/upload.js';
@@ -62,6 +65,9 @@ export function createApp() {
   app.use('/api/codes', codeRoutes);
   app.use('/api/content', contentRoutes);
   app.use('/api/documents', documentRoutes);
+  app.use('/api/classes', classRoutes);
+  app.use('/api/teachers', teacherRoutes);
+  app.use('/api/calendar', calendarRoutes);
   app.use('/api/parent', parentRoutes);
   // Mounted last: it owns bare paths like /api/health, so a more specific
   // prefix above must get the chance to match first.

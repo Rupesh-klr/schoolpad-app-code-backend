@@ -329,3 +329,114 @@ CREATE TABLE IF NOT EXISTS ls_document_read (
   CONSTRAINT fk_ls_docread_doc  FOREIGN KEY (document_id) REFERENCES ls_document (id) ON DELETE CASCADE,
   CONSTRAINT fk_ls_docread_user FOREIGN KEY (user_id)     REFERENCES ls_user (id)     ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Classes, teachers, timetable, calendar
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- A real class within a school: "Class 6-A at Greenwood".
+--
+-- ls_student_profile already carries school_id and class_level, and that stays
+-- the authority on which class a student is in. This table is the class as a
+-- *thing* — it has a title, a description, a dress code and a timetable, none
+-- of which belong on every student row.
+CREATE TABLE IF NOT EXISTS ls_class (
+  id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  school_id      BIGINT UNSIGNED NOT NULL,
+  class_level    TINYINT UNSIGNED NOT NULL,
+  -- '' rather than NULL: NULL is never equal to NULL in a UNIQUE index, so a
+  -- nullable section would let "Class 6, no section" be created many times.
+  section        VARCHAR(16)  NOT NULL DEFAULT '',
+  title          VARCHAR(191) NULL,
+  description    TEXT         NULL,
+  dress_code     TEXT         NULL,
+  -- The "plan of action" — what this class is working towards this term.
+  plan_of_action TEXT         NULL,
+  notes          TEXT         NULL,
+  -- No foreign key: ls_teacher is declared after this table, and adding the
+  -- constraint by ALTER would break the "safe to re-run" property of
+  -- schema.sql, since MySQL has no ADD CONSTRAINT IF NOT EXISTS. Every read
+  -- LEFT JOINs the teacher, so a deleted one shows as blank rather than an error.
+  class_teacher_id BIGINT UNSIGNED NULL,
+  room           VARCHAR(64)  NULL,
+  status         ENUM('active','inactive') NOT NULL DEFAULT 'active',
+  created_by     BIGINT UNSIGNED NULL,
+  created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_ls_class (school_id, class_level, section),
+  KEY idx_ls_class_school (school_id, class_level),
+  CONSTRAINT fk_ls_class_school FOREIGN KEY (school_id) REFERENCES ls_school (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Teachers are staff records, not accounts.
+--
+-- Deliberately not rows in ls_user: a teacher here is a name on a timetable
+-- that students read. Giving them a login is a separate feature with its own
+-- permissions, and conflating the two now would mean either teachers with
+-- dormant credentials or a fourth role nobody has specified.
+CREATE TABLE IF NOT EXISTS ls_teacher (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  school_id  BIGINT UNSIGNED NOT NULL,
+  full_name  VARCHAR(150) NOT NULL,
+  email      VARCHAR(191) NULL,
+  phone      VARCHAR(20)  NULL,
+  subjects   VARCHAR(500) NULL,
+  status     ENUM('active','inactive') NOT NULL DEFAULT 'active',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_ls_teacher_school (school_id, status),
+  CONSTRAINT fk_ls_teacher_school FOREIGN KEY (school_id) REFERENCES ls_school (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- One period on one weekday.
+--
+-- weekday is ISO-8601: 1 = Monday .. 7 = Sunday. Not JavaScript's 0 = Sunday,
+-- which puts the weekend at both ends of the week and makes every ordering
+-- query need a special case.
+CREATE TABLE IF NOT EXISTS ls_timetable_slot (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  class_id   BIGINT UNSIGNED NOT NULL,
+  weekday    TINYINT UNSIGNED NOT NULL,
+  period_no  TINYINT UNSIGNED NOT NULL,
+  start_time TIME NULL,
+  end_time   TIME NULL,
+  subject    VARCHAR(120) NOT NULL,
+  teacher_id BIGINT UNSIGNED NULL,
+  room       VARCHAR(64) NULL,
+  -- Break and lunch occupy a period slot but have no teacher or subject to
+  -- speak of; flagging them lets the grid render them differently.
+  is_break   TINYINT(1) NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  -- One subject per period per day. Saving the grid is an upsert against this.
+  UNIQUE KEY uq_ls_slot (class_id, weekday, period_no),
+  KEY idx_ls_slot_teacher (teacher_id),
+  CONSTRAINT fk_ls_slot_class   FOREIGN KEY (class_id)   REFERENCES ls_class (id)   ON DELETE CASCADE,
+  CONSTRAINT fk_ls_slot_teacher FOREIGN KEY (teacher_id) REFERENCES ls_teacher (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Holidays, exams, events. Same three-level audience as documents.
+CREATE TABLE IF NOT EXISTS ls_calendar_event (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  scope       ENUM('global','school','class') NOT NULL DEFAULT 'school',
+  school_id   BIGINT UNSIGNED NULL,
+  class_id    BIGINT UNSIGNED NULL,
+  title       VARCHAR(191) NOT NULL,
+  description TEXT NULL,
+  event_type  ENUM('holiday','exam','event','activity','deadline') NOT NULL DEFAULT 'event',
+  -- DATE, not DATETIME. A holiday is a calendar day, and DATETIME would make it
+  -- shift by a day between an IST app and a UTC server.
+  starts_on   DATE NOT NULL,
+  ends_on     DATE NULL,
+  created_by  BIGINT UNSIGNED NULL,
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_ls_event_range (starts_on, ends_on),
+  KEY idx_ls_event_audience (scope, school_id, class_id),
+  CONSTRAINT fk_ls_event_school FOREIGN KEY (school_id) REFERENCES ls_school (id) ON DELETE CASCADE,
+  CONSTRAINT fk_ls_event_class  FOREIGN KEY (class_id)  REFERENCES ls_class (id)  ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
