@@ -8,8 +8,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "node scripts/free-port.js && node --watch src/server.js",
-    "start": "node src/server.js",
+    "dev": "node scripts/free-port.js && node --watch app.js",
+    "start": "node app.js",
     "migrate": "node src/db/migrate.js",
     "seed": "node src/db/seed.js",
     "reset": "node src/db/migrate.js --drop && node src/db/seed.js",
@@ -25,5 +25,6 @@
     "multer": "^2.0.0",
     "mysql2": "^3.11.3",
     "zod": "^3.23.8"
-  }
+  },
+  "main": "app.js"
 }
