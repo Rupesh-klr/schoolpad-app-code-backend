@@ -21,6 +21,17 @@ export const pool = mysql.createPool({
   dateStrings: ['DATE'],
   timezone: 'Z',
   charset: 'utf8mb4_general_ci',
+
+  /*
+   * Bound how long a connection attempt can hang.
+   *
+   * The driver's default is long enough that an unreachable host - a wrong
+   * DB_HOST, a firewall dropping packets rather than refusing them - makes
+   * every request wait instead of failing. A refused connection errors in
+   * milliseconds; a silently dropped one waits for a TCP timeout, which is the
+   * case this covers.
+   */
+  connectTimeout: 8000,
 });
 
 /** Run a query, return rows. */
@@ -63,11 +74,30 @@ export async function transaction(fn) {
   }
 }
 
-export async function healthCheck() {
+/**
+ * Is the database reachable?
+ *
+ * Races the query against a short deadline. /api/health is what a load balancer
+ * or a managed host polls to decide whether the process is alive, so it has to
+ * answer quickly even when the database does not — an endpoint that hangs for
+ * the length of a TCP timeout is indistinguishable from a dead app, and gets
+ * the container killed for a fault that is not its own.
+ */
+export async function healthCheck(timeoutMs = 2000) {
+  const base = { host: config.db.host, name: config.db.database };
+
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ ...base, up: false, error: 'TIMEOUT' }), timeoutMs);
+  });
+
+  const probe = pool.query('SELECT 1')
+    .then(() => ({ ...base, up: true }))
+    .catch((err) => ({ ...base, up: false, error: err.code || err.message }));
+
   try {
-    await pool.query('SELECT 1');
-    return { up: true, host: config.db.host, name: config.db.database };
-  } catch (err) {
-    return { up: false, host: config.db.host, name: config.db.database, error: err.code || err.message };
+    return await Promise.race([probe, deadline]);
+  } finally {
+    clearTimeout(timer);
   }
 }

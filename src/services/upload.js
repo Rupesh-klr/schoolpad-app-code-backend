@@ -17,7 +17,20 @@ import { UPLOAD, MAX_UPLOAD_BYTES } from '../config/constants.js';
  * their 4,000 files among everyone else's.
  */
 
-fs.mkdirSync(config.storage.uploadDir, { recursive: true });
+/*
+ * Create the upload directory, but never let it stop the process.
+ *
+ * This runs at import time, so an unwritable path here would throw before the
+ * server binds its port - and a managed host reports that only as "the app did
+ * not start", with nothing about why. An API that runs and fails uploads is far
+ * easier to diagnose than one that never starts.
+ */
+try {
+  fs.mkdirSync(config.storage.uploadDir, { recursive: true });
+} catch (err) {
+  console.warn(`[upload] cannot create ${config.storage.uploadDir}: ${err.message}`);
+  console.warn('[upload] file uploads will fail until this path is writable.');
+}
 
 /**
  * Which bucket a file belongs to, from its extension.
