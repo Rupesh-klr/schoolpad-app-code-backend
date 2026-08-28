@@ -20,7 +20,7 @@ import { ROLES, USER_STATUS } from '../config/constants.js';
 
 if (config.isProd) {
   console.error('✖ Refusing to seed with NODE_ENV=production.');
-  console.error('  Create the first admin with scripts/create-admin.js instead.');
+  console.error('  Create the first admin with npm run create-admin instead.');
   process.exit(1);
 }
 

@@ -14,7 +14,8 @@
     "seed": "node src/db/seed.js",
     "reset": "node src/db/migrate.js --drop && node src/db/seed.js",
     "codes:generate": "node scripts/generate-codes.js",
-    "build": "echo \"No build step - this is a Node API. npm install is all that is needed.\""
+    "build": "echo \"No build step - this is a Node API. npm install is all that is needed.\"",
+    "create-admin": "node scripts/create-admin.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
