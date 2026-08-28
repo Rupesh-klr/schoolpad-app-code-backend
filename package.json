@@ -8,12 +8,13 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "node scripts/free-port.js && node --watch app.js",
-    "start": "node app.js",
+    "dev": "node scripts/free-port.js && node --watch app.cjs",
+    "start": "node app.cjs",
     "migrate": "node src/db/migrate.js",
     "seed": "node src/db/seed.js",
     "reset": "node src/db/migrate.js --drop && node src/db/seed.js",
-    "codes:generate": "node scripts/generate-codes.js"
+    "codes:generate": "node scripts/generate-codes.js",
+    "build": "echo \"No build step - this is a Node API. npm install is all that is needed.\""
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -26,5 +27,5 @@
     "mysql2": "^3.11.3",
     "zod": "^3.23.8"
   },
-  "main": "app.js"
+  "main": "app.cjs"
 }
