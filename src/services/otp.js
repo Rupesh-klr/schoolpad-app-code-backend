@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { OTP } from '../config/constants.js';
 import { config } from '../config/index.js';
 import { execute, one } from '../config/db.js';
-import { sha256 } from './password.js';
+import { sha256, timingSafeEqual } from './password.js';
 
 /**
  * OTP issue and verify.
@@ -121,6 +121,36 @@ export async function requestOtp(identifier) {
  */
 export async function verifyOtp(identifier, code) {
   const id = classifyIdentifier(identifier);
+  const submitted = String(code || '').trim();
+
+  /*
+   * Accept an allowlisted code before anything else.
+   *
+   * Checked first, and deliberately: it has to work even when no challenge row
+   * exists or the real one has expired, because the whole point is to get past
+   * a delivery channel that is not there. Requiring a live challenge would
+   * reintroduce the dependency it exists to remove.
+   *
+   * Compared in constant time. These are shared secrets in practice, and a
+   * plain === leaks the matching prefix through timing, which would let
+   * someone recover a code they were not told.
+   */
+  if (config.otp.bypassCodes.length) {
+    const matched = config.otp.bypassCodes.some((allowed) => timingSafeEqual(allowed, submitted));
+
+    if (matched) {
+      // Burn any live challenge so the real code cannot be replayed after.
+      await execute(
+        'UPDATE ls_otp_challenge SET consumed_at = NOW() WHERE identifier = ? AND consumed_at IS NULL',
+        [id.value],
+      );
+
+      // Logged without the code: the log would otherwise hand the allowlist to
+      // anyone who can read it.
+      console.warn(`[otp] BYPASS code accepted for ${id.value} - OTP_BYPASS_CODES is set`);
+      return id;
+    }
+  }
 
   const challenge = await one(
     `SELECT id, code_hash, attempts, expires_at

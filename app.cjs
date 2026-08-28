@@ -89,6 +89,24 @@ function boot() {
       console.log(`  > cors       ${config.corsOrigins.join(', ') || '(any origin - set CORS_ORIGIN)'}`);
       console.log('');
 
+      /*
+       * Say it loudly, every start.
+       *
+       * A bypass list is meant to be temporary, and the failure mode is that it
+       * quietly outlives the reason for it. A banner on every boot is the
+       * cheapest thing that keeps it visible; the codes themselves are never
+       * printed, since the log would then hand them out.
+       */
+      if (config.otp.bypassCodes.length) {
+        console.warn('  ============================================================');
+        console.warn(`  !  OTP BYPASS ACTIVE - ${config.otp.bypassCodes.length} allowlisted code(s)`);
+        console.warn('  !  Any of them signs in as ANY phone number or email,');
+        console.warn('  !  including an admin. Intended only until SMS delivery works.');
+        console.warn('  !  Clear OTP_BYPASS_CODES to turn it off.');
+        console.warn('  ============================================================');
+        console.warn('');
+      }
+
       // After the handler is live, never before: a slow or unreachable database
       // must not delay the app becoming able to answer.
       dbMod.healthCheck()

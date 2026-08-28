@@ -24,6 +24,11 @@ router.get('/health', asyncHandler(async (req, res) => {
     env: config.env,
     database: db,
     uptimeSeconds: Math.round(process.uptime()),
+
+    // Reported as a count, never the codes themselves. Anyone checking whether
+    // this server is safe to point real users at should be able to see the
+    // answer without reading a log or the deployment panel.
+    ...(config.otp.bypassCodes.length ? { otpBypassActive: config.otp.bypassCodes.length } : {}),
   });
 }));
 

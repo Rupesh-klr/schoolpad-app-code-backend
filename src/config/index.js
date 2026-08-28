@@ -49,6 +49,26 @@ export const config = {
 
   otp: {
     provider: process.env.OTP_PROVIDER || 'console',
+
+    /**
+     * Codes that are accepted for any identifier, in addition to the real one.
+     *
+     * A stand-in for SMS delivery that does not exist yet: without it nobody
+     * can complete a sign-in on the deployed app at all. The freshly generated
+     * code keeps working — this is an addition, not a replacement.
+     *
+     * Understand what it is, though. Any of these codes signs in as *any*
+     * phone number or email, so while the list is non-empty the OTP step is
+     * decoration rather than a check. Empty it the day real delivery works.
+     *
+     * Whitespace is tolerated because these get pasted into hosting panels,
+     * where a stray space is easy and the resulting "wrong code" would be very
+     * hard to explain.
+     */
+    bypassCodes: (process.env.OTP_BYPASS_CODES || '')
+      .split(',')
+      .map((c) => c.trim())
+      .filter(Boolean),
     whatsapp: {
       phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
       accessToken: process.env.WHATSAPP_ACCESS_TOKEN || '',
